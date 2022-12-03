@@ -1,5 +1,5 @@
-use hyper::{Body, Response, StatusCode};
-
+use actix_web::{body::BoxBody, http::StatusCode, HttpResponse, ResponseError};
+use std::fmt;
 
 #[derive(Clone, Debug)]
 pub enum Error {
@@ -8,27 +8,32 @@ pub enum Error {
 }
 
 impl Error {
-    fn http_body(&self) -> Body {
+    fn http_body(&self) -> BoxBody {
         match self {
-            Self::SolverError(s) => s.clone().into_bytes().into(),
-            Self::SerializeError(s) => s.clone().into_bytes().into(),
+            Self::SolverError(s) => BoxBody::new(s.clone()),
+            Self::SerializeError(s) => BoxBody::new(s.clone()),
         }
-    }
-
-    pub(crate) fn default_err_resp() -> Response<Body> {
-        // This should be safe to unwrap
-        Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body("internal server error".into()).unwrap()
     }
 }
 
-impl Into<Response<Body>> for Error {
-    fn into(self) -> Response<Body> {
-        match Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(self.http_body()) {
-            Ok(resp) => resp,
-            Err(err) => {
-                eprint!("Failed to convert Error into response: {:?}", err);
-                Self::default_err_resp()
-            },
-        }
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let message = match self {
+            Self::SolverError(s) => s.clone(),
+            Self::SerializeError(s) => s.clone(),
+        };
+        write!(f, "{}", message)
+    }
+}
+
+impl ResponseError for Error {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+
+    fn error_response(&self) -> HttpResponse<BoxBody> {
+        let body = self.http_body();
+        // Create response and set content type
+        HttpResponse::InternalServerError().body(body)
     }
 }

@@ -1,36 +1,33 @@
-use solver::response::Submission;
-use solver::submit;
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use hyper::{Body, Request, Response, Server};
-use hyper::service::{make_service_fn, service_fn};
+use actix_web::{web, App, HttpRequest, HttpServer, Responder};
+use solver::Solver;
+use std::sync::Arc;
 
-async fn hello_world(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let submission = match submit() {
-        Ok(s) => s,
-        Err(err) => {
-            eprint!("solver error: {:?}", err);
-            return Ok(err.into())
-        }
-    };
-    Ok(submission.into())
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    HttpServer::new(|| {
+        let app_state = AppState {
+            solver: Arc::new(Solver::new()),
+        };
+
+        App::new()
+            .configure(configure_route)
+            .app_data(web::Data::new(app_state))
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }
 
-#[tokio::main]
-async fn main() {
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+// this function could be located in a different module
+fn configure_route(cfg: &mut web::ServiceConfig) {
+    cfg.service(web::resource("/submit").route(web::get().to(submit)));
+}
 
-    // A `Service` is needed for every connection, so this
-    // creates one from our `hello_world` function.
-    let make_svc = make_service_fn(|_conn| async {
-        // service_fn converts our function into a `Service`
-        Ok::<_, Infallible>(service_fn(hello_world))
-    });
+#[derive(Clone)]
+struct AppState {
+    solver: Arc<Solver>,
+}
 
-    let server = Server::bind(&addr).serve(make_svc);
-
-    // Run this server for... forever!
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
-    }
+async fn submit(_req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
+    state.solver.submit()
 }
