@@ -6,5 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-good_lp = { workspace = true }
+good_lp = { workspace = true, features = ["lp-solvers"], default-features = false }
 hyper = { workspace = true, features = ["full"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true , features = ["serde", "v4"], default-features = false }

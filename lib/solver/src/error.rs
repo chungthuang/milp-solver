@@ -3,6 +3,7 @@ use hyper::{Body, Response, StatusCode};
 
 #[derive(Clone, Debug)]
 pub enum Error {
+    SerializeError(String),
     SolverError(String),
 }
 
@@ -10,10 +11,11 @@ impl Error {
     fn http_body(&self) -> Body {
         match self {
             Self::SolverError(s) => s.clone().into_bytes().into(),
+            Self::SerializeError(s) => s.clone().into_bytes().into(),
         }
     }
 
-    fn default_err_resp() -> Response<Body> {
+    pub(crate) fn default_err_resp() -> Response<Body> {
         // This should be safe to unwrap
         Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body("internal server error".into()).unwrap()
     }

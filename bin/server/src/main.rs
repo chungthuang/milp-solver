@@ -1,19 +1,19 @@
-use solver::solve;
+use solver::response::Submission;
+use solver::submit;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use hyper::{Body, Request, Response, Server};
 use hyper::service::{make_service_fn, service_fn};
 
 async fn hello_world(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let solution = match solve() {
-        Ok(sol) => sol,
+    let submission = match submit() {
+        Ok(s) => s,
         Err(err) => {
             eprint!("solver error: {:?}", err);
             return Ok(err.into())
         }
     };
-    let body = solution.into_bytes();
-    Ok(Response::new(body.into()))
+    Ok(submission.into())
 }
 
 #[tokio::main]
