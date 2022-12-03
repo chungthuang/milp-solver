@@ -1,0 +1,36 @@
+use solver::solve;
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use hyper::{Body, Request, Response, Server};
+use hyper::service::{make_service_fn, service_fn};
+
+async fn hello_world(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    let solution = match solve() {
+        Ok(sol) => sol,
+        Err(err) => {
+            eprint!("solver error: {:?}", err);
+            return Ok(err.into())
+        }
+    };
+    let body = solution.into_bytes();
+    Ok(Response::new(body.into()))
+}
+
+#[tokio::main]
+async fn main() {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+
+    // A `Service` is needed for every connection, so this
+    // creates one from our `hello_world` function.
+    let make_svc = make_service_fn(|_conn| async {
+        // service_fn converts our function into a `Service`
+        Ok::<_, Infallible>(service_fn(hello_world))
+    });
+
+    let server = Server::bind(&addr).serve(make_svc);
+
+    // Run this server for... forever!
+    if let Err(e) = server.await {
+        eprintln!("server error: {}", e);
+    }
+}
