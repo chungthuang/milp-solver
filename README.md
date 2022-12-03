@@ -1,0 +1,1 @@
+This project provides a web server to interact with a linear programming solver. It assumes the [CBC](https://www.coin-or.org/Cbc/) library is installed.
