@@ -1,8 +1,8 @@
 pub mod error;
-pub mod response;
+
+use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
-use crate::response::Submission;
 use good_lp::{
     constraint,
     solvers::lp_solvers::{CbcSolver, LpSolver},
@@ -10,14 +10,20 @@ use good_lp::{
 };
 use uuid::Uuid;
 
-pub struct Solver {}
+pub struct Solver {
+    active_problems: Arc<Mutex<Vec<ProblemId>>>,
+}
+
+pub type ProblemId = Uuid;
 
 impl Solver {
     pub fn new() -> Self {
-        Solver {}
+        Solver {
+            active_problems: Arc::new(Mutex::new(Vec::new()))
+        }
     }
 
-    pub fn submit(&self) -> Result<Submission, Error> {
+    pub fn submit(&self) -> Result<ProblemId, Error> {
         variables! {
             vars:
                    a <= 1;
@@ -34,6 +40,8 @@ impl Solver {
             .with(constraint!(1 + a >= 4 - b))
             .solve()
             .map_err(|err| Error::SolverError(err.to_string()))?;
-        Ok(Submission { id: problem_id })
+        let mut active_problems = self.active_problems.lock().unwrap();
+        active_problems.push(problem_id);
+        Ok(problem_id )
     }
 }

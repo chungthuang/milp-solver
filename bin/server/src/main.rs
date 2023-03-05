@@ -1,33 +1,20 @@
-use actix_web::{web, App, HttpRequest, HttpServer, Responder};
 use solver::Solver;
-use std::sync::Arc;
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| {
-        let app_state = AppState {
-            solver: Arc::new(Solver::new()),
-        };
+#[tokio::main]
+async fn main() {
+    let mut handles = vec![];
+    handles.push(tokio::spawn(async {
+        tokio::spawn(poll_market_state());
+    }));
+    handles.push(tokio::spawn(poll_solution()));
 
-        App::new()
-            .configure(configure_route)
-            .app_data(web::Data::new(app_state))
-    })
-    .bind(("127.0.0.1", 8080))?
-    .run()
-    .await
+    futures::future::join_all(handles).await;
 }
 
-// this function could be located in a different module
-fn configure_route(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::resource("/submit").route(web::get().to(submit)));
+async fn poll_market_state() {
+
 }
 
-#[derive(Clone)]
-struct AppState {
-    solver: Arc<Solver>,
-}
+async fn poll_solution() {
 
-async fn submit(_req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
-    state.solver.submit()
 }
