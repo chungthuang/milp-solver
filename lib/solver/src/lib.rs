@@ -39,7 +39,7 @@ impl Solver {
             .with(constraint!(a + 2 <= b))
             .with(constraint!(1 + a >= 4 - b))
             .solve()
-            .map_err(|err| Error::SolverError(err.to_string()))?;
+            .map_err(|err| Error::Solver(err.to_string()))?;
         let mut active_problems = self.active_problems.lock().unwrap();
         active_problems.push(problem_id);
         Ok(problem_id )

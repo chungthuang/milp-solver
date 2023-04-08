@@ -2,15 +2,15 @@ use std::fmt;
 
 #[derive(Clone, Debug)]
 pub enum Error {
-    SerializeError(String),
-    SolverError(String),
+    Serialization(String),
+    Solver(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let message = match self {
-            Self::SolverError(s) => s.clone(),
-            Self::SerializeError(s) => s.clone(),
+            Self::Solver(s) => s.clone(),
+            Self::Serialization(s) => s.clone(),
         };
         write!(f, "{}", message)
     }
