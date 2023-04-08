@@ -33,12 +33,13 @@ async fn main() {
 async fn poll_market_state(rpc_client_url: String, poll_freq: Duration) {
     loop {
         info!("Poll market state");
-        let parachain_client =
-            ParachainClient::new(&rpc_client_url).await.expect("failed to create parachain client");
+        let parachain_client = ParachainClient::new(&rpc_client_url)
+            .await
+            .expect("failed to create parachain client");
         let state = parachain_client.get_market_state().await;
+        info!("market state {:?}", state);
 
         tokio::time::sleep(poll_freq).await;
-        info!("market state {:?}", state);
     }
 }
 
