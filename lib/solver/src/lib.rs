@@ -19,7 +19,7 @@ pub type ProblemId = Uuid;
 impl Solver {
     pub fn new() -> Self {
         Solver {
-            active_problems: Arc::new(Mutex::new(Vec::new()))
+            active_problems: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -42,6 +42,6 @@ impl Solver {
             .map_err(|err| Error::Solver(err.to_string()))?;
         let mut active_problems = self.active_problems.lock().unwrap();
         active_problems.push(problem_id);
-        Ok(problem_id )
+        Ok(problem_id)
     }
 }
