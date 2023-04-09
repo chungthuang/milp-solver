@@ -28,7 +28,7 @@ impl MarketState {
 }
 
 // AcccountId, quantity, price
-pub type Submission = (u64, u64);
+pub type Submission = (Account, u64, u64);
 
 pub type Account = Vec<u8>;
 
