@@ -8,17 +8,10 @@ use good_lp::{
     solvers::lp_solvers::{CbcSolver, LpSolver},
     variable, Expression, ProblemVariables, Solution, SolverModel, Variable,
 };
-use parachain_client::{Account, Submission};
+use parachain_client::{AccountId, MarketSolution, Submission};
 use uuid::Uuid;
 
 const STATUS_ACCEPTED: f64 = 1.;
-
-#[derive(Debug)]
-pub struct MarketSolution {
-    pub accepted_bids: Vec<Account>,
-    pub accepted_asks: Vec<Account>,
-    pub auction_price: u64,
-}
 
 pub fn solve(bids: Vec<Submission>, asks: Vec<Submission>) -> Result<MarketSolution, Error> {
     let mut vars = ProblemVariables::new();
@@ -79,12 +72,13 @@ fn evaluate(
 ) -> Result<MarketSolution, Error> {
     let mut auction_price = u64::MAX;
 
-    let mut accepted_bids: Vec<Account> = Vec::new();
+    let mut accepted_bids: Vec<AccountId> = Vec::new();
     let mut total_bid_quantity = 0;
-    for ((account, quantity, price), _)  in  bids
+    for ((account, quantity, price), _) in bids
         .into_iter()
         .zip(bid_status)
-        .filter(|(_, accepted)| sol.value(*accepted) == STATUS_ACCEPTED) {
+        .filter(|(_, accepted)| sol.value(*accepted) == STATUS_ACCEPTED)
+    {
         if price < auction_price {
             auction_price = price;
         }
@@ -92,12 +86,13 @@ fn evaluate(
         accepted_bids.push(account);
     }
 
-    let mut accepted_asks: Vec<Account> = Vec::new();
+    let mut accepted_asks: Vec<AccountId> = Vec::new();
     let mut total_ask_quantity = 0;
     for ((account, quantity, price), _) in asks
         .into_iter()
         .zip(ask_status)
-        .filter(|(_, accepted)| sol.value(*accepted) == STATUS_ACCEPTED) {
+        .filter(|(_, accepted)| sol.value(*accepted) == STATUS_ACCEPTED)
+    {
         if price > auction_price {
             // All ask price should be lower than auction price
             return Err(Error::InvalidSolution(format!("Ask price {price} from account {account:?} is higher than auction price {auction_price}")));
@@ -107,7 +102,9 @@ fn evaluate(
     }
 
     if total_bid_quantity != total_ask_quantity {
-        return Err(Error::InvalidSolution(format!("Total bid quantity {total_bid_quantity} != total ask quantity {total_ask_quantity}")));
+        return Err(Error::InvalidSolution(format!(
+            "Total bid quantity {total_bid_quantity} != total ask quantity {total_ask_quantity}"
+        )));
     }
 
     Ok(MarketSolution {

@@ -17,5 +17,8 @@ jsonrpsee = { version = "0.16.2", features = ["http-client"] }
 log = "0.4.17"
 serde = "1"
 serde_json = "1"
+sp-core = { git = "https://github.com/paritytech/substrate", "branch" = "polkadot-v0.9.37" }
+sp-keyring = "23.0.0"
+subxt = "0.28.0"
 tokio = "1"
 uuid = "1"
