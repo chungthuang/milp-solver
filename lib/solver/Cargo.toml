@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 good_lp = { workspace = true, features = ["lp-solvers"], default-features = false }
+parachain-client = { path = "../parachain-client" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true , features = ["serde", "v4"], default-features = false }
