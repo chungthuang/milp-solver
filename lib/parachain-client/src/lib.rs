@@ -35,26 +35,27 @@ impl MarketState {
 
 #[derive(Debug)]
 pub struct MarketSolution {
-    pub accepted_bids: Vec<AccountId32>,
-    pub accepted_asks: Vec<AccountId32>,
+    pub accepted_bids: Vec<AccountId>,
+    pub accepted_asks: Vec<AccountId>,
     pub auction_price: u64,
 }
 
-pub type Submission = (AccountId32, Quantity, Price);
+// Can't deserialize directly to AccountId32 because it's a tuple of [u8; 32]
+pub type Submission = (AccountId, Quantity, Price);
 
 // Re-export for solver crate
-pub type AccountId = AccountId32;
+pub type AccountId = [u8; 32];
 pub type Quantity = u64;
 pub type Price = u64;
 
 impl ParachainClient {
-    pub async fn new(rpc_url: &str) -> Result<Self> {
-        let parachain_api = OnlineClient::from_url(rpc_url)
+    pub async fn new(rpc_addr: &str) -> Result<Self> {
+        let parachain_api = OnlineClient::from_url(format!("ws://{rpc_addr}"))
             .await
             .map_err(|e| anyhow!("failed to build subxt client, err: {e:?}"))?;
         let signer = PairSigner::new(AccountKeyring::Alice.pair());
         let rpc_client = HttpClientBuilder::default()
-            .build(rpc_url)
+            .build(format!("http://{rpc_addr}"))
             .map_err(|e| anyhow!("failed to build rpc client, err: {e:?}"))?;
         Ok(ParachainClient {
             parachain_api,
@@ -73,8 +74,8 @@ impl ParachainClient {
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
         let tx = parachain::tx().market_state().submit_solution(
             solution.auction_price,
-            BoundedVec(solution.accepted_bids),
-            BoundedVec(solution.accepted_asks),
+            BoundedVec(solution.accepted_bids.into_iter().map(|a| AccountId32(a)).collect()),
+            BoundedVec(solution.accepted_asks.into_iter().map(|a| AccountId32(a)).collect()),
         );
         let hash = self
             .parachain_api
@@ -94,8 +95,8 @@ mod tests {
 
     fn get_market_state() -> Result<MarketState> {
         Ok(MarketState {
-            bids: vec![(AccountId32([1; 32]), 10, 7), (AccountId32([2; 32]), 10, 6)],
-            asks: vec![(AccountId32([3; 32]), 10, 5)],
+            bids: vec![(AccountId([1; 32]), 10, 7), (AccountId([2; 32]), 10, 6)],
+            asks: vec![(AccountId([3; 32]), 10, 5)],
             stage: CLEARING_STAGE,
         })
     }
