@@ -2580,6 +2580,7 @@ name = "solver"
 version = "0.1.0"
 dependencies = [
  "good_lp",
+ "log",
  "parachain-client",
  "serde",
  "serde_json",

@@ -22,9 +22,11 @@ type Stage = u64;
 
 #[derive(Debug, Deserialize)]
 pub struct MarketState {
-    pub bids: Vec<Submission>,
-    pub asks: Vec<Submission>,
+    // Can't deserialize directly to AccountId32 because it's a tuple of [u8; 32]
+    pub bids: Vec<(AccountId, Vec<Product>)>,
+    pub asks: Vec<(AccountId, Vec<Product>)>,
     pub stage: Stage,
+    pub periods: u32,
 }
 
 impl MarketState {
@@ -35,18 +37,27 @@ impl MarketState {
 
 #[derive(Debug)]
 pub struct MarketSolution {
-    pub accepted_bids: Vec<AccountId>,
-    pub accepted_asks: Vec<AccountId>,
-    pub auction_price: u64,
+    // For each account, track if the bids are accepted
+    pub bids: Vec<(AccountId, Vec<ProductAccepted>)>,
+    // For each account, track if the asks are accepted
+    pub asks: Vec<(AccountId, Vec<ProductAccepted>)>,
+    // Auction price for each period
+    pub auction_prices: Vec<u64>,
 }
 
-// Can't deserialize directly to AccountId32 because it's a tuple of [u8; 32]
-pub type Submission = (AccountId, Quantity, Price);
+pub type ProductAccepted = bool;
 
 // Re-export for solver crate
 pub type AccountId = [u8; 32];
-pub type Quantity = u64;
-pub type Price = u64;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct Product {
+    pub price: u64,
+    pub quantity: u64,
+    pub start_period: u32,
+    // A single product will have end_period == start_period
+    pub end_period: u32,
+}
 
 impl ParachainClient {
     pub async fn new(rpc_addr: &str) -> Result<Self> {
@@ -73,9 +84,9 @@ impl ParachainClient {
 
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
         let tx = parachain::tx().market_state().submit_solution(
-            solution.auction_price,
-            BoundedVec(solution.accepted_bids.into_iter().map(|a| AccountId32(a)).collect()),
-            BoundedVec(solution.accepted_asks.into_iter().map(|a| AccountId32(a)).collect()),
+            BoundedVec(solution.auction_prices),
+            BoundedVec(solution.bids.into_iter().map(|(a, product_accepted)| (AccountId32(a), BoundedVec(product_accepted))).collect()),
+            BoundedVec(solution.asks.into_iter().map(|(a, product_accepted)| (AccountId32(a), BoundedVec(product_accepted))).collect()),
         );
         let hash = self
             .parachain_api
