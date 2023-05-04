@@ -22,7 +22,7 @@ async fn main() {
         match parachain_client.get_market_state().await {
             Ok(state) => {
                 info!("market state {state:?}");
-                match solve(state.bids, state.asks) {
+                match solve(state.bids, state.asks, state.periods) {
                     Ok(solution) => {
                         info!("solution {solution:?}");
                         match parachain_client.submit_solution(solution).await {
