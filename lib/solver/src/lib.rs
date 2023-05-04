@@ -8,108 +8,157 @@ use good_lp::{
     solvers::lp_solvers::{CbcSolver, LpSolver},
     variable, Expression, ProblemVariables, Solution, SolverModel, Variable,
 };
-use parachain_client::{AccountId, MarketSolution, Submission};
+use parachain_client::{AccountId, MarketSolution, Product, ProductAccepted};
 use uuid::Uuid;
 
 const STATUS_ACCEPTED: f64 = 1.;
 
-pub fn solve(bids: Vec<Submission>, asks: Vec<Submission>) -> Result<MarketSolution, Error> {
+pub fn solve(bids: Vec<(AccountId, Vec<Product>)>, asks: Vec<(AccountId, Vec<Product>)>, periods: u32) -> Result<MarketSolution, Error> {
     let mut vars = ProblemVariables::new();
 
-    let bid_status = vars.add_vector(variable().binary(), bids.len());
-    let ask_status = vars.add_vector(variable().binary(), asks.len());
+    let mut total_bid_status: Vec<Variable> = Vec::new();
+    // A vector of bid quantities for each period
+    let mut total_bid_quantities: Vec<Vec<Expression>> = Vec::with_capacity(periods as usize);
+    for _ in 0..periods {
+        total_bid_quantities.push(Vec::new());
+    }
+    let mut total_utilities: Vec<Expression> = Vec::new();
+    for (_account, account_bids) in bids.iter() {
+        for bid in account_bids.iter() {
+            let bid_status = vars.add(variable().binary());
+            total_bid_status.push(bid_status);
+            for period in bid.start_period..bid.end_period {
+                total_bid_quantities[period as usize].push(bid_status.mul(bid.quantity as f64));
+                total_utilities.push(bid_status.mul((bid.quantity * bid.price) as f64));
+            }
+        }
+    }
 
-    let bid_quantities = bids.iter().map(|(_, quantity, _)| *quantity as f64);
-    let ask_quantities = asks.iter().map(|(_, quantity, _)| *quantity as f64);
-
-    let bid_quantities: Vec<Expression> = bid_quantities
-        .zip(bid_status.clone())
-        .map(|(quantity, accepted)| accepted.mul(quantity))
-        .collect();
-    let ask_quantities: Vec<Expression> = ask_quantities
-        .zip(ask_status.clone())
-        .map(|(quantity, accepted)| accepted.mul(quantity))
-        .collect();
-
-    let bid_utilities = bids.iter().map(|(_, q, p)| (q * p) as f64);
-    let ask_costs = asks.iter().map(|(_, q, p)| (q * p) as f64);
-
-    let total_utility: Vec<Expression> = bid_utilities
-        .zip(bid_status.clone())
-        .map(|(utility, accepted)| accepted.mul(utility))
-        .collect();
-    let total_costs: Vec<Expression> = ask_costs
-        .zip(ask_status.clone())
-        .map(|(cost, accepted)| accepted.mul(cost))
-        .collect();
+    let mut total_ask_status: Vec<Variable> = Vec::new();
+    let mut total_ask_quantities: Vec<Vec<Expression>> = Vec::with_capacity(periods as usize);
+    for _ in 0..periods {
+        total_ask_quantities.push(Vec::new());
+    }
+    let mut total_costs: Vec<Expression> = Vec::new();
+    for (_account, account_asks) in asks.iter() {
+        for ask in account_asks.iter() {
+            let ask_status = vars.add(variable().binary());
+            total_ask_status.push(ask_status);
+            for period in ask.start_period..ask.end_period {
+                total_ask_quantities[period as usize].push(ask_status.mul(ask.quantity as f64));
+                total_costs.push(ask_status.mul((ask.quantity * ask.price) as f64));
+            }
+        }
+    }
 
     let social_welfare: Expression =
-        total_utility.into_iter().sum::<Expression>() - total_costs.into_iter().sum::<Expression>();
-
-    let quantity_match: Expression = bid_quantities.into_iter().sum::<Expression>()
-        - ask_quantities.into_iter().sum::<Expression>();
+        total_utilities.into_iter().sum::<Expression>() - total_costs.into_iter().sum::<Expression>();
+    println!("social welfare {:?}", social_welfare);
 
     let problem_id = Uuid::new_v4();
     println!("Problem ID {problem_id:?}");
     let cbc_solver =
         LpSolver(CbcSolver::new().with_temp_solution_file(format!("/tmp/milp_{}.sol", problem_id)));
-    let sol = vars
-        .maximise(social_welfare)
-        .using(cbc_solver)
-        .with(quantity_match.eq(0))
-        .solve()
-        .map_err(|err| Error::Solver(err.to_string()))?;
 
-    evaluate(sol, bids, asks, bid_status, ask_status)
+    let mut model = vars
+        .maximise(social_welfare)
+        .using(cbc_solver);
+
+    for (total_bids_in_period, total_asks_in_period) in total_bid_quantities.into_iter().zip(total_ask_quantities) {
+        let quantity_match: Expression = total_bids_in_period.into_iter().sum::<Expression>()
+            - total_asks_in_period.into_iter().sum::<Expression>();
+        println!("quantity match constraint {:?}", quantity_match);
+        model = model.with(quantity_match.eq(0));
+    }
+
+    let sol = model.solve().map_err(|err| Error::Solver(err.to_string()))?;
+
+    evaluate(sol, bids, asks, total_bid_status, total_ask_status, periods as usize)
 }
 
 fn evaluate(
     sol: LpSolution,
-    bids: Vec<Submission>,
-    asks: Vec<Submission>,
-    bid_status: Vec<Variable>,
-    ask_status: Vec<Variable>,
+    bids: Vec<(AccountId, Vec<Product>)>,
+    asks: Vec<(AccountId, Vec<Product>)>,
+    mut bid_status: Vec<Variable>,
+    mut ask_status: Vec<Variable>,
+    periods: usize,
 ) -> Result<MarketSolution, Error> {
-    let mut auction_price = u64::MAX;
+    let mut auction_prices: Vec<u64> = Vec::with_capacity(periods);
+    let mut total_bid_quantities: Vec<u64> = Vec::with_capacity(periods);
+    let mut total_ask_quantities: Vec<u64> = Vec::with_capacity(periods);
+    for _ in 0..periods {
+        auction_prices.push(0);
+        total_bid_quantities.push(0);
+        total_ask_quantities.push(0);
+    }
+    let bid_status_count = bid_status.len();
+    let ask_status_count = ask_status.len();
+    println!("{} bid_status, {} ask_status", bid_status_count, ask_status_count);
 
-    let mut accepted_bids: Vec<AccountId> = Vec::new();
-    let mut total_bid_quantity = 0;
-    for ((account, quantity, price), _) in bids
-        .into_iter()
-        .zip(bid_status)
-        .filter(|(_, accepted)| sol.value(*accepted) == STATUS_ACCEPTED)
-    {
-        if price < auction_price {
-            auction_price = price;
+    // Iterate the same way as solve creates the vector of bids
+    let mut solved_bids: Vec<(AccountId, Vec<ProductAccepted>)> = Vec::with_capacity(bids.len());
+    for (account, account_bids) in bids.into_iter() {
+        let mut account_solved_bids: Vec<ProductAccepted> = Vec::with_capacity(account_bids.len());
+        for bid in account_bids.iter() {
+            let Some(status) = bid_status.pop() else {
+                return Err(Error::InvalidSolution("More bids than bid_status".to_owned()));
+            };
+            let product_accepted = sol.value(status) == STATUS_ACCEPTED;
+            account_solved_bids.push(product_accepted);
+            if product_accepted {
+                for period in bid.start_period..bid.end_period {
+                    let period = period as usize;
+                    if auction_prices[period] == 0  || bid.price < auction_prices[period] {
+                        auction_prices[period] = bid.price;
+                    }
+                    total_bid_quantities[period] += bid.quantity;
+                }
+            }
         }
-        total_bid_quantity += quantity;
-        accepted_bids.push(account);
+        solved_bids.push((account, account_solved_bids));
+    }
+    if let Some(_) = bid_status.pop() {
+        return Err(Error::InvalidSolution("More bid_status than bids".to_owned()))
     }
 
-    let mut accepted_asks: Vec<AccountId> = Vec::new();
-    let mut total_ask_quantity = 0;
-    for ((account, quantity, price), _) in asks
-        .into_iter()
-        .zip(ask_status)
-        .filter(|(_, accepted)| sol.value(*accepted) == STATUS_ACCEPTED)
-    {
-        if price > auction_price {
-            // All ask price should be lower than auction price
-            return Err(Error::InvalidSolution(format!("Ask price {price} from account {account:?} is higher than auction price {auction_price}")));
+    let mut solved_asks: Vec<(AccountId, Vec<ProductAccepted>)> = Vec::with_capacity(asks.len());
+    for (account, account_asks) in asks.into_iter() {
+        let mut account_solved_asks: Vec<ProductAccepted> = Vec::with_capacity(account_asks.len());
+        for ask in account_asks.iter() {
+            let Some(status) = ask_status.pop() else {
+                return Err(Error::InvalidSolution("More asks than ask_status".to_owned()));
+            };
+            let product_accepted = sol.value(status) == STATUS_ACCEPTED;
+            account_solved_asks.push(product_accepted);
+            if product_accepted {
+                for period in ask.start_period..ask.end_period {
+                    let period = period as usize;
+                    if ask.price > auction_prices[period] {
+                        // All ask price should be lower than auction price
+                        return Err(Error::InvalidSolution(format!("Ask price {} from account {:?} is higher than auction price {}", ask.price, account, auction_prices[period])));
+                    }
+                    total_ask_quantities[period] += ask.quantity;
+                }
+            }
         }
-        total_ask_quantity += quantity;
-        accepted_asks.push(account);
+        solved_asks.push((account, account_solved_asks));
+    }
+    if let Some(_) = ask_status.pop() {
+        return Err(Error::InvalidSolution("More ask_status than asks".to_owned()))
     }
 
-    if total_bid_quantity != total_ask_quantity {
-        return Err(Error::InvalidSolution(format!(
-            "Total bid quantity {total_bid_quantity} != total ask quantity {total_ask_quantity}"
-        )));
+    for (period, (bid_quantity, ask_quantity)) in total_bid_quantities.iter().zip(total_ask_quantities).enumerate() {
+        if *bid_quantity != ask_quantity {
+            return Err(Error::InvalidSolution(format!(
+                "Total bid quantity {bid_quantity} != total ask quantity {ask_quantity} at period {period}"
+            )));
+        }
     }
 
     Ok(MarketSolution {
-        accepted_bids,
-        accepted_asks,
-        auction_price,
+        bids: solved_bids,
+        asks: solved_asks,
+        auction_prices,
     })
 }
