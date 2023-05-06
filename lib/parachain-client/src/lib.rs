@@ -5,8 +5,7 @@ use jsonrpsee::{
     rpc_params,
 };
 use parachain::runtime_types::{
-    market_state::pallet::OperatingPeriods as ParachainOperatingPeriods,
-    sp_core::bounded::bounded_vec::BoundedVec,
+    market_state::pallet::Product as ParachainProduct, sp_core::bounded::bounded_vec::BoundedVec,
 };
 use serde::Deserialize;
 use sp_keyring::{sr25519::sr25519, AccountKeyring};
@@ -26,8 +25,8 @@ type Stage = u64;
 #[derive(Debug, Deserialize)]
 pub struct MarketState {
     // Can't deserialize directly to AccountId32 because it's a tuple of [u8; 32]
-    pub bids: Vec<(AccountId, Vec<Product>)>,
-    pub asks: Vec<(AccountId, Vec<Product>)>,
+    pub bids: Vec<(AccountId, Vec<FlexibleProduct>)>,
+    pub asks: Vec<(AccountId, Vec<FlexibleProduct>)>,
     pub stage: Stage,
     pub periods: u32,
 }
@@ -41,9 +40,9 @@ impl MarketState {
 #[derive(Debug)]
 pub struct MarketSolution {
     // For each account, track if the bids are accepted
-    pub bids: Vec<(AccountId, Vec<Option<OperatingPeriods>>)>,
+    pub bids: Vec<(AccountId, Vec<Option<Product>>)>,
     // For each account, track if the asks are accepted
-    pub asks: Vec<(AccountId, Vec<Option<OperatingPeriods>>)>,
+    pub asks: Vec<(AccountId, Vec<Option<Product>>)>,
     // Auction price for each period
     pub auction_prices: Vec<u64>,
 }
@@ -51,25 +50,23 @@ pub struct MarketSolution {
 // Re-export for solver crate
 pub type AccountId = [u8; 32];
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
 pub struct Product {
     pub price: u64,
     pub quantity: u64,
-    pub flexible_loads: Vec<OperatingPeriods>,
+    pub start_period: u32,
+    pub end_period: u32,
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
-pub struct OperatingPeriods {
-    pub start: u32,
-    // A single product will have start == end
-    pub end: u32,
-}
+pub type FlexibleProduct = Vec<Product>;
 
-impl Into<ParachainOperatingPeriods> for OperatingPeriods {
-    fn into(self) -> ParachainOperatingPeriods {
-        ParachainOperatingPeriods {
-            start: self.start,
-            end: self.end,
+impl Into<ParachainProduct> for Product {
+    fn into(self) -> ParachainProduct {
+        ParachainProduct {
+            price: self.price,
+            quantity: self.quantity,
+            start_period: self.start_period,
+            end_period: self.end_period,
         }
     }
 }
@@ -104,13 +101,13 @@ impl ParachainClient {
                 solution
                     .bids
                     .into_iter()
-                    .map(|(a, operating_periods)| {
+                    .map(|(a, accepted_bids)| {
                         (
                             AccountId32(a),
                             BoundedVec(
-                                operating_periods
+                                accepted_bids
                                     .into_iter()
-                                    .map(|op| op.map(|op| op.into()))
+                                    .map(|p| p.map(|p| p.into()))
                                     .collect(),
                             ),
                         )
@@ -121,13 +118,13 @@ impl ParachainClient {
                 solution
                     .asks
                     .into_iter()
-                    .map(|(a, operating_periods)| {
+                    .map(|(a, accepted_asks)| {
                         (
                             AccountId32(a),
                             BoundedVec(
-                                operating_periods
+                                accepted_asks
                                     .into_iter()
-                                    .map(|op| op.map(|op| op.into()))
+                                    .map(|p| p.map(|p| p.into()))
                                     .collect(),
                             ),
                         )
