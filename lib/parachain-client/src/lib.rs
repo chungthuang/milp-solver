@@ -4,7 +4,10 @@ use jsonrpsee::{
     http_client::{HttpClient, HttpClientBuilder},
     rpc_params,
 };
-use parachain::runtime_types::sp_core::bounded::bounded_vec::BoundedVec;
+use parachain::runtime_types::{
+    market_state::pallet::OperatingPeriods as ParachainOperatingPeriods,
+    sp_core::bounded::bounded_vec::BoundedVec,
+};
 use serde::Deserialize;
 use sp_keyring::{sr25519::sr25519, AccountKeyring};
 use subxt::utils::H256;
@@ -38,14 +41,12 @@ impl MarketState {
 #[derive(Debug)]
 pub struct MarketSolution {
     // For each account, track if the bids are accepted
-    pub bids: Vec<(AccountId, Vec<ProductAccepted>)>,
+    pub bids: Vec<(AccountId, Vec<Option<OperatingPeriods>>)>,
     // For each account, track if the asks are accepted
-    pub asks: Vec<(AccountId, Vec<ProductAccepted>)>,
+    pub asks: Vec<(AccountId, Vec<Option<OperatingPeriods>>)>,
     // Auction price for each period
     pub auction_prices: Vec<u64>,
 }
-
-pub type ProductAccepted = bool;
 
 // Re-export for solver crate
 pub type AccountId = [u8; 32];
@@ -54,9 +55,23 @@ pub type AccountId = [u8; 32];
 pub struct Product {
     pub price: u64,
     pub quantity: u64,
-    pub start_period: u32,
-    // A single product will have end_period == start_period
-    pub end_period: u32,
+    pub flexible_loads: Vec<OperatingPeriods>,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct OperatingPeriods {
+    pub start: u32,
+    // A single product will have start == end
+    pub end: u32,
+}
+
+impl Into<ParachainOperatingPeriods> for OperatingPeriods {
+    fn into(self) -> ParachainOperatingPeriods {
+        ParachainOperatingPeriods {
+            start: self.start,
+            end: self.end,
+        }
+    }
 }
 
 impl ParachainClient {
@@ -85,8 +100,40 @@ impl ParachainClient {
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
         let tx = parachain::tx().market_state().submit_solution(
             BoundedVec(solution.auction_prices),
-            BoundedVec(solution.bids.into_iter().map(|(a, product_accepted)| (AccountId32(a), BoundedVec(product_accepted))).collect()),
-            BoundedVec(solution.asks.into_iter().map(|(a, product_accepted)| (AccountId32(a), BoundedVec(product_accepted))).collect()),
+            BoundedVec(
+                solution
+                    .bids
+                    .into_iter()
+                    .map(|(a, operating_periods)| {
+                        (
+                            AccountId32(a),
+                            BoundedVec(
+                                operating_periods
+                                    .into_iter()
+                                    .map(|op| op.map(|op| op.into()))
+                                    .collect(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+            BoundedVec(
+                solution
+                    .asks
+                    .into_iter()
+                    .map(|(a, operating_periods)| {
+                        (
+                            AccountId32(a),
+                            BoundedVec(
+                                operating_periods
+                                    .into_iter()
+                                    .map(|op| op.map(|op| op.into()))
+                                    .collect(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
         );
         let hash = self
             .parachain_api

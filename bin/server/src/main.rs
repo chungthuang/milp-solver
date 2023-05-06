@@ -28,7 +28,7 @@ async fn main() {
                         match parachain_client.submit_solution(solution).await {
                             Ok(hash) => {
                                 info!("submit solution in {hash:?}");
-                            },
+                            }
                             Err(err) => {
                                 error!("failed to submit solution, err: {err:?}");
                             }
