@@ -9,14 +9,14 @@ use good_lp::{
     variable, Constraint, Expression, ProblemVariables, Solution, SolverModel, Variable,
 };
 use log::debug;
-use parachain_client::{AccountId, MarketSolution, OperatingPeriods, Product};
+use parachain_client::{AccountId, FlexibleProduct, MarketSolution, Product};
 use uuid::Uuid;
 
 const STATUS_ACCEPTED: f64 = 1.;
 
 pub fn solve(
-    bids: Vec<(AccountId, Vec<Product>)>,
-    asks: Vec<(AccountId, Vec<Product>)>,
+    bids: Vec<(AccountId, Vec<FlexibleProduct>)>,
+    asks: Vec<(AccountId, Vec<FlexibleProduct>)>,
     periods: u32,
 ) -> Result<MarketSolution, Error> {
     let mut vars = ProblemVariables::new();
@@ -29,12 +29,12 @@ pub fn solve(
     }
     let mut total_utilities: Vec<Expression> = Vec::new();
     let mut flexible_load_constraint: Vec<Constraint> = Vec::new();
-    for (_account, account_bids) in bids.iter() {
-        for bid in account_bids.iter() {
-            let mut bid_status = vars.add_vector(variable().binary(), bid.flexible_loads.len());
+    for (_account, flexible_bids) in bids.iter() {
+        for flexible_bid in flexible_bids.iter() {
+            let mut bid_status = vars.add_vector(variable().binary(), flexible_bid.len());
             flexible_load_constraint.push(bid_status.iter().sum::<Expression>().leq(1));
-            for (schedule, status) in bid.flexible_loads.iter().zip(bid_status.iter()) {
-                for period in schedule.start..schedule.end {
+            for (bid, status) in flexible_bid.iter().zip(bid_status.iter()) {
+                for period in bid.start_period..bid.end_period {
                     total_bid_quantities[period as usize].push(status.mul(bid.quantity as f64));
                     total_utilities.push(status.mul((bid.quantity * bid.price) as f64));
                 }
@@ -49,12 +49,12 @@ pub fn solve(
         total_ask_quantities.push(Vec::new());
     }
     let mut total_costs: Vec<Expression> = Vec::new();
-    for (_account, account_asks) in asks.iter() {
-        for ask in account_asks.iter() {
-            let mut ask_status = vars.add_vector(variable().binary(), ask.flexible_loads.len());
+    for (_account, flexible_asks) in asks.iter() {
+        for flexible_ask in flexible_asks.iter() {
+            let mut ask_status = vars.add_vector(variable().binary(), flexible_ask.len());
             flexible_load_constraint.push(ask_status.iter().sum::<Expression>().leq(1));
-            for (schedule, status) in ask.flexible_loads.iter().zip(ask_status.iter()) {
-                for period in schedule.start..schedule.end {
+            for (ask, status) in flexible_ask.iter().zip(ask_status.iter()) {
+                for period in ask.start_period..ask.end_period {
                     total_ask_quantities[period as usize].push(status.mul(ask.quantity as f64));
                     total_costs.push(status.mul((ask.quantity * ask.price) as f64));
                 }
@@ -105,8 +105,8 @@ pub fn solve(
 
 fn evaluate(
     sol: LpSolution,
-    bids: Vec<(AccountId, Vec<Product>)>,
-    asks: Vec<(AccountId, Vec<Product>)>,
+    bids: Vec<(AccountId, Vec<FlexibleProduct>)>,
+    asks: Vec<(AccountId, Vec<FlexibleProduct>)>,
     bid_status: Vec<Variable>,
     ask_status: Vec<Variable>,
     periods: usize,
@@ -123,26 +123,26 @@ fn evaluate(
     let mut ask_status = ask_status.into_iter();
 
     // Iterate the same way as solve creates the vector of bids
-    let mut solved_bids: Vec<(AccountId, Vec<Option<OperatingPeriods>>)> =
+    let mut final_bids: Vec<(AccountId, Vec<Option<Product>>)> =
         Vec::with_capacity(bids.len());
-    for (account, account_bids) in bids.into_iter() {
-        let mut account_solved_bids: Vec<Option<OperatingPeriods>> = Vec::with_capacity(account_bids.len());
-        for bid in account_bids.iter() {
-            let mut operating_period: Option<OperatingPeriods> = None;
-            for schedule in bid.flexible_loads.iter() {
+    for (account, flexible_bids) in bids.into_iter() {
+        let mut account_accepted_bids: Vec<Option<Product>> =
+            Vec::with_capacity(flexible_bids.len());
+        for flexible_bid in flexible_bids.iter() {
+            let mut accepted_bid: Option<Product> = None;
+            for bid in flexible_bid.iter() {
                 let Some(status) = bid_status.next() else {
                     return Err(Error::InvalidSolution("More bids than bid_status".to_owned()));
                 };
-                let product_accepted = sol.value(status) == STATUS_ACCEPTED;
-                if product_accepted {
+                if sol.value(status) == STATUS_ACCEPTED {
                     // Make sure at most only 1 flexible load is accepted
-                    if operating_period.is_some() {
+                    if accepted_bid.is_some() {
                         return Err(Error::InvalidSolution(
                             "Multiple flexible load accepted for a bid".to_owned(),
                         ));
                     }
-                    operating_period = Some(*schedule);
-                    for period in schedule.start..schedule.end {
+                    accepted_bid = Some(*bid);
+                    for period in bid.start_period..bid.end_period {
                         let period = period as usize;
                         if auction_prices[period] == 0 || bid.price < auction_prices[period] {
                             auction_prices[period] = bid.price;
@@ -151,9 +151,9 @@ fn evaluate(
                     }
                 }
             }
-            account_solved_bids.push(operating_period);
+            account_accepted_bids.push(accepted_bid);
         }
-        solved_bids.push((account, account_solved_bids));
+        final_bids.push((account, account_accepted_bids));
     }
     if bid_status.next().is_some() {
         return Err(Error::InvalidSolution(
@@ -161,26 +161,25 @@ fn evaluate(
         ));
     }
 
-    let mut solved_asks: Vec<(AccountId, Vec<Option<OperatingPeriods>>)> =
-        Vec::with_capacity(asks.len());
-    for (account, account_asks) in asks.into_iter() {
-        let mut account_solved_asks: Vec<Option<OperatingPeriods>> = Vec::with_capacity(account_asks.len());
-        for ask in account_asks.iter() {
-            let mut operating_period: Option<OperatingPeriods> = None;
-            for schedule in ask.flexible_loads.iter() {
+    let mut final_asks: Vec<(AccountId, Vec<Option<Product>>)> = Vec::with_capacity(asks.len());
+    for (account, flexible_asks) in asks.into_iter() {
+        let mut account_accepted_asks: Vec<Option<Product>> =
+            Vec::with_capacity(flexible_asks.len());
+        for flexible_ask in flexible_asks.iter() {
+            let mut accepted_ask: Option<Product> = None;
+            for ask in flexible_ask.iter() {
                 let Some(status) = ask_status.next() else {
                     return Err(Error::InvalidSolution("More asks than ask_status".to_owned()));
                 };
-                let product_accepted = sol.value(status) == STATUS_ACCEPTED;
-                if product_accepted {
+                if sol.value(status) == STATUS_ACCEPTED {
                     // Make sure at most only 1 flexible load is accepted
-                    if operating_period.is_some() {
+                    if accepted_ask.is_some() {
                         return Err(Error::InvalidSolution(
                             "Multiple flexible load accepted for a ask".to_owned(),
                         ));
                     }
-                    operating_period = Some(*schedule);
-                    for period in schedule.start..schedule.end {
+                    accepted_ask = Some(*ask);
+                    for period in ask.start_period..ask.end_period {
                         let period = period as usize;
                         if ask.price > auction_prices[period] {
                             // All ask price should be lower than auction price
@@ -193,9 +192,9 @@ fn evaluate(
                     }
                 }
             }
-            account_solved_asks.push(operating_period);
+            account_accepted_asks.push(accepted_ask);
         }
-        solved_asks.push((account, account_solved_asks));
+        final_asks.push((account, account_accepted_asks));
     }
     if ask_status.next().is_some() {
         return Err(Error::InvalidSolution(
@@ -216,8 +215,8 @@ fn evaluate(
     }
 
     Ok(MarketSolution {
-        bids: solved_bids,
-        asks: solved_asks,
+        bids: final_bids,
+        asks: final_asks,
         auction_prices,
     })
 }
