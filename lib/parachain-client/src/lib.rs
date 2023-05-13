@@ -29,6 +29,8 @@ pub struct MarketState {
     pub asks: Vec<(AccountId, Vec<FlexibleProduct>)>,
     pub stage: Stage,
     pub periods: u32,
+    pub grid_price: u64,
+    pub feed_in_tariff: u64,
 }
 
 impl MarketState {
