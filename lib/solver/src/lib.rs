@@ -50,7 +50,7 @@ pub fn solve(
         let quantity_match: Expression = bids_quantities.into_iter().sum::<Expression>()
             - asks_quantities.into_iter().sum::<Expression>();
         debug!(
-            "period {} quantity match constraint {:?}",
+            "Period {}: quantity match constraint {:?}",
             period, quantity_match
         );
         model = model.with(quantity_match.eq(0));
@@ -129,25 +129,41 @@ fn evaluate(
     ask_status: Vec<Variable>,
     periods: usize,
 ) -> Result<MarketSolution, Error> {
-    let bids_solutions = evaluate_decisions(&sol, bids, bid_status, ProductType::Bid, periods)?;
-    let asks_solutions = evaluate_decisions(&sol, asks, ask_status, ProductType::Ask, periods)?;
+    let bids_solutions =
+        evaluate_product_decisions(&sol, bids, bid_status, ProductType::Bid, periods)?;
+    let asks_solutions =
+        evaluate_product_decisions(&sol, asks, ask_status, ProductType::Ask, periods)?;
 
     let mut auction_prices = Vec::with_capacity(periods);
-    for (period, (min_bid_price, max_ask_price)) in bids_solutions.auction_prices.iter().zip(asks_solutions.auction_prices).enumerate() {
+    for (period, (min_bid_price, max_ask_price)) in bids_solutions
+        .auction_prices
+        .iter()
+        .zip(asks_solutions.auction_prices)
+        .enumerate()
+    {
+        debug!(
+            "Period {}: Min bid price {}, max ask price at period {}",
+            period, min_bid_price, max_ask_price
+        );
         if *min_bid_price < max_ask_price {
-            return Err(Error::InvalidSolution(format!("Minimum bid price {} is less than maximum ask price {} at period {}", min_bid_price, max_ask_price, period)))
+            return Err(Error::InvalidSolution(format!(
+                "Period {}: Minimum bid price {} is less than maximum ask price {}",
+                period, min_bid_price, max_ask_price
+            )));
         }
         auction_prices.push(*min_bid_price);
     }
 
-    for (period, (bid_quantity, ask_quantity)) in bids_solutions.quantities
+    for (period, (bid_quantity, ask_quantity)) in bids_solutions
+        .quantities
         .iter()
         .zip(asks_solutions.quantities)
         .enumerate()
     {
         if *bid_quantity != ask_quantity {
             return Err(Error::InvalidSolution(format!(
-                "Total bid quantity {} != total ask quantity {} at period {}", bid_quantity, ask_quantity, period
+                "Period {}: Total bid quantity {} != total ask quantity {}",
+                period, bid_quantity, ask_quantity
             )));
         }
     }
@@ -168,7 +184,7 @@ struct ProductDecisions {
 }
 
 /// Decide if a product is accepted, and if so, which flexible load
-fn evaluate_decisions(
+fn evaluate_product_decisions(
     sol: &LpSolution,
     products: Vec<(AccountId, Vec<FlexibleProduct>)>,
     decisions: Vec<Variable>,
@@ -238,4 +254,324 @@ fn evaluate_decisions(
         auction_prices,
         quantities,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_log::test;
+
+    // Evaluate solution for single period products
+    #[test]
+    fn test_solve_single_products() {
+        let account_1 = test_account(1);
+        let account_2 = test_account(2);
+        let account_3 = test_account(3);
+
+        let bid_1 = Product {
+            price: 6,
+            quantity: 5,
+            start_period: 1,
+            end_period: 2,
+        };
+        let ask_1 = Product {
+            price: 5,
+            quantity: 5,
+            start_period: 1,
+            end_period: 2,
+        };
+
+        let bid_2 = Product {
+            price: 8,
+            quantity: 2,
+            start_period: 3,
+            end_period: 4,
+        };
+        let ask_2 = Product {
+            price: 7,
+            quantity: 2,
+            start_period: 3,
+            end_period: 4,
+        };
+
+        let bids = vec![(account_1, vec![fixed_load(bid_1), fixed_load(bid_2)])];
+
+        let asks = vec![
+            (account_2, vec![fixed_load(ask_1)]),
+            (account_3, vec![fixed_load(ask_2)]),
+        ];
+
+        let solution = solve(bids, asks, 5).unwrap();
+        assert_eq!(
+            solution.bids,
+            vec![(account_1, vec![Some(bid_1), Some(bid_2)])]
+        );
+        assert_eq!(
+            solution.asks,
+            vec![
+                (account_2, vec![Some(ask_1)]),
+                (account_3, vec![Some(ask_2)])
+            ]
+        );
+        assert_eq!(
+            solution.auction_prices,
+            vec![0, bid_1.price, 0, bid_2.price, 0]
+        )
+    }
+
+    #[test]
+    fn test_solve_single_products_max_social_welfare() {
+        let account_1 = test_account(1);
+        let account_2 = test_account(2);
+        let account_3 = test_account(3);
+
+        let bid_1 = Product {
+            price: 6,
+            quantity: 5,
+            start_period: 1,
+            end_period: 2,
+        };
+        let ask_1 = Product {
+            price: 6,
+            quantity: 5,
+            start_period: 1,
+            end_period: 2,
+        };
+
+        let bid_2 = Product {
+            price: 7,
+            quantity: 5,
+            start_period: 1,
+            end_period: 2,
+        };
+        let ask_2 = Product {
+            price: 7,
+            quantity: 5,
+            start_period: 1,
+            end_period: 2,
+        };
+
+        let bids = vec![(account_1, vec![fixed_load(bid_1), fixed_load(bid_2)])];
+
+        let asks = vec![
+            (account_2, vec![fixed_load(ask_1)]),
+            (account_3, vec![fixed_load(ask_2)]),
+        ];
+
+        // bid_2 will match with ask_1, because the social welfare would be 7 * 5 - 6 * 5 = 5
+        // if bid_1 matches with ask_1 and bid_2 matches with ask_2, than the social welfare would be 0
+        let solution = solve(bids, asks, 3).unwrap();
+        assert_eq!(solution.bids, vec![(account_1, vec![None, Some(bid_2)])]);
+        assert_eq!(
+            solution.asks,
+            vec![(account_2, vec![Some(ask_1)]), (account_3, vec![None])]
+        );
+        assert_eq!(solution.auction_prices, vec![0, bid_2.price, 0])
+    }
+
+    #[test]
+    fn test_solve_continuous_products() {
+        let account_1 = test_account(1);
+        let account_2 = test_account(2);
+        let account_3 = test_account(3);
+
+        let bid_1 = Product {
+            price: 5,
+            quantity: 5,
+            start_period: 1,
+            end_period: 3,
+        };
+        let bid_2 = Product {
+            price: 7,
+            quantity: 2,
+            start_period: 5,
+            end_period: 7,
+        };
+
+        let ask_1 = Product {
+            price: 4,
+            quantity: 5,
+            start_period: 1,
+            end_period: 3,
+        };
+        let ask_2 = Product {
+            price: 6,
+            quantity: 2,
+            start_period: 5,
+            end_period: 7,
+        };
+
+        let bids = vec![(account_1, vec![fixed_load(bid_1), fixed_load(bid_2)])];
+
+        let asks = vec![
+            (account_2, vec![fixed_load(ask_1)]),
+            (account_3, vec![fixed_load(ask_2)]),
+        ];
+
+        let solution = solve(bids, asks, 7).unwrap();
+        assert_eq!(
+            solution.bids,
+            vec![(account_1, vec![Some(bid_1), Some(bid_2)])]
+        );
+        assert_eq!(
+            solution.asks,
+            vec![
+                (account_2, vec![Some(ask_1)]),
+                (account_3, vec![Some(ask_2)])
+            ]
+        );
+        assert_eq!(
+            solution.auction_prices,
+            vec![0, bid_1.price, bid_1.price, 0, 0, bid_2.price, bid_2.price]
+        )
+    }
+
+    #[test]
+    fn test_solve_overlapping_continuous_products() {
+        let account_1 = test_account(1);
+        let account_2 = test_account(2);
+        let account_3 = test_account(3);
+
+        let bid_1 = Product {
+            price: 5,
+            quantity: 5,
+            start_period: 1,
+            end_period: 4,
+        };
+        let bid_2 = Product {
+            price: 7,
+            quantity: 2,
+            start_period: 2,
+            end_period: 5,
+        };
+
+        let ask_1 = Product {
+            price: 4,
+            quantity: 7,
+            start_period: 1,
+            end_period: 5,
+        };
+
+        let bids = vec![(account_1, vec![fixed_load(bid_1), fixed_load(bid_2)])];
+
+        let asks = vec![(account_2, vec![fixed_load(ask_1.clone())])];
+
+        let solution = solve(bids, asks.clone(), 5).unwrap();
+        // No enough bid quantity to match ask_1 at period 1
+        assert_no_solution(solution);
+
+        let bid_3 = Product {
+            price: 5,
+            quantity: 2,
+            start_period: 1,
+            end_period: 2,
+        };
+        let bid_4 = Product {
+            price: 6,
+            quantity: 5,
+            start_period: 4,
+            end_period: 5,
+        };
+
+        let bids = vec![
+            (account_1, vec![fixed_load(bid_1), fixed_load(bid_2)]),
+            (account_3, vec![fixed_load(bid_3), fixed_load(bid_4)]),
+        ];
+
+        let solution = solve(bids.clone(), asks, 5).unwrap();
+        assert_eq!(
+            solution.bids,
+            vec![
+                (account_1, vec![Some(bid_1), Some(bid_2)]),
+                (account_3, vec![Some(bid_3), Some(bid_4)])
+            ]
+        );
+        assert_eq!(solution.asks, vec![(account_2, vec![Some(ask_1)]),]);
+        assert_eq!(solution.auction_prices, vec![0, 5, 5, 5, 6])
+    }
+
+    #[test]
+    fn test_solve_flexible_products() {
+        let account_1 = test_account(1);
+        let account_2 = test_account(2);
+        let account_3 = test_account(3);
+
+        let bid_1 = vec![
+            Product {
+                price: 5,
+                quantity: 5,
+                start_period: 1,
+                end_period: 3,
+            },
+            Product {
+                price: 3,
+                quantity: 3,
+                start_period: 2,
+                end_period: 4,
+            },
+        ];
+        let bid_2 = vec![
+            Product {
+                price: 7,
+                quantity: 2,
+                start_period: 2,
+                end_period: 4,
+            },
+            Product {
+                price: 8,
+                quantity: 2,
+                start_period: 5,
+                end_period: 7,
+            },
+        ];
+
+        let ask_1 = vec![Product {
+            price: 6,
+            quantity: 2,
+            start_period: 2,
+            end_period: 4,
+        }];
+        let ask_2 = vec![Product {
+            price: 2,
+            quantity: 3,
+            start_period: 1,
+            end_period: 5,
+        }];
+
+        let bids = vec![(account_1, vec![bid_1, bid_2.clone()])];
+
+        let asks = vec![(account_2, vec![ask_1.clone()]), (account_3, vec![ask_2])];
+
+        let solution = solve(bids, asks, 7).unwrap();
+        assert_eq!(solution.bids, vec![(account_1, vec![None, Some(bid_2[0])])]);
+        assert_eq!(
+            solution.asks,
+            vec![(account_2, vec![Some(ask_1[0])]), (account_3, vec![None])]
+        );
+        assert_eq!(solution.auction_prices, vec![0, 0, 7, 7, 0, 0, 0])
+    }
+
+    fn test_account(account_index: u8) -> AccountId {
+        [account_index; 32]
+    }
+
+    fn fixed_load(product: Product) -> FlexibleProduct {
+        vec![product]
+    }
+
+    fn assert_no_solution(sol: MarketSolution) {
+        for (_, bids) in sol.bids {
+            for b in bids {
+                assert!(b.is_none());
+            }
+        }
+        for (_, asks) in sol.asks {
+            for a in asks {
+                assert!(a.is_none());
+            }
+        }
+        for price in sol.auction_prices {
+            assert_eq!(price, 0);
+        }
+    }
 }
