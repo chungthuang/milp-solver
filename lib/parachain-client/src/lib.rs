@@ -145,16 +145,3 @@ impl ParachainClient {
 
 #[subxt::subxt(runtime_metadata_path = "../../metadata/parachain.scale")]
 mod parachain {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn get_market_state() -> Result<MarketState> {
-        Ok(MarketState {
-            bids: vec![(AccountId([1; 32]), 10, 7), (AccountId([2; 32]), 10, 6)],
-            asks: vec![(AccountId([3; 32]), 10, 5)],
-            stage: CLEARING_STAGE,
-        })
-    }
-}
