@@ -4,13 +4,11 @@ use jsonrpsee::{
     http_client::{HttpClient, HttpClientBuilder},
     rpc_params,
 };
-use parachain::runtime_types::{
-    market_state::pallet::Product as ParachainProduct, sp_core::bounded::bounded_vec::BoundedVec,
-};
+use parachain::runtime_types::sp_core::bounded::bounded_vec::BoundedVec;
 use serde::Deserialize;
 use sp_keyring::{sr25519::sr25519, AccountKeyring};
 use subxt::utils::H256;
-use subxt::{config::PolkadotConfig, tx::PairSigner, utils::AccountId32, OnlineClient};
+use subxt::{config::PolkadotConfig, tx::PairSigner, OnlineClient};
 
 const CLEARING_STAGE: Stage = 1;
 
@@ -20,14 +18,17 @@ pub struct ParachainClient {
     rpc_client: HttpClient,
 }
 
+pub type ProductId = u32;
+
+pub type SelectedFlexibleLoad = u32;
+
 type Stage = u64;
 
 #[derive(Debug, Deserialize)]
 pub struct MarketState {
-    // Can't deserialize directly to AccountId32 because it's a tuple of [u8; 32]
-    pub bids: Vec<(AccountId, Vec<FlexibleProduct>)>,
-    pub asks: Vec<(AccountId, Vec<FlexibleProduct>)>,
-    pub stage: Stage,
+    pub bids: Vec<(ProductId, FlexibleProduct)>,
+    pub asks: Vec<(ProductId, FlexibleProduct)>,
+    pub stage: u64,
     pub periods: u32,
     pub grid_price: u64,
     pub feed_in_tariff: u64,
@@ -42,15 +43,29 @@ impl MarketState {
 #[derive(Debug)]
 pub struct MarketSolution {
     // For each account, track if the bids are accepted
-    pub bids: Vec<(AccountId, Vec<Option<Product>>)>,
+    pub bids: Vec<(ProductId, SelectedFlexibleLoad)>,
     // For each account, track if the asks are accepted
-    pub asks: Vec<(AccountId, Vec<Option<Product>>)>,
+    pub asks: Vec<(ProductId, SelectedFlexibleLoad)>,
     // Auction price for each period
     pub auction_prices: Vec<u64>,
 }
 
-// Re-export for solver crate
-pub type AccountId = [u8; 32];
+impl MarketSolution {
+    pub fn no_solution(&self) -> bool {
+        if !self.bids.is_empty() {
+            return false
+        }
+        if !self.asks.is_empty() {
+            return false
+        }
+        for p in self.auction_prices.iter() {
+            if *p > 0 {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
 pub struct Product {
@@ -61,17 +76,6 @@ pub struct Product {
 }
 
 pub type FlexibleProduct = Vec<Product>;
-
-impl Into<ParachainProduct> for Product {
-    fn into(self) -> ParachainProduct {
-        ParachainProduct {
-            price: self.price,
-            quantity: self.quantity,
-            start_period: self.start_period,
-            end_period: self.end_period,
-        }
-    }
-}
 
 impl ParachainClient {
     pub async fn new(rpc_addr: &str) -> Result<Self> {
@@ -99,40 +103,8 @@ impl ParachainClient {
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
         let tx = parachain::tx().market_state().submit_solution(
             BoundedVec(solution.auction_prices),
-            BoundedVec(
-                solution
-                    .bids
-                    .into_iter()
-                    .map(|(a, accepted_bids)| {
-                        (
-                            AccountId32(a),
-                            BoundedVec(
-                                accepted_bids
-                                    .into_iter()
-                                    .map(|p| p.map(|p| p.into()))
-                                    .collect(),
-                            ),
-                        )
-                    })
-                    .collect(),
-            ),
-            BoundedVec(
-                solution
-                    .asks
-                    .into_iter()
-                    .map(|(a, accepted_asks)| {
-                        (
-                            AccountId32(a),
-                            BoundedVec(
-                                accepted_asks
-                                    .into_iter()
-                                    .map(|p| p.map(|p| p.into()))
-                                    .collect(),
-                            ),
-                        )
-                    })
-                    .collect(),
-            ),
+            BoundedVec(solution.bids),
+            BoundedVec(solution.asks),
         );
         let hash = self
             .parachain_api
