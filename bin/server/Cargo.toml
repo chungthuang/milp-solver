@@ -6,5 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix-web = { workspace = true }
+env_logger = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+parachain-client = { path = "../../lib/parachain-client" }
 solver = { path = "../../lib/solver" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

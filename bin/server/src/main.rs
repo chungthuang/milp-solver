@@ -1,33 +1,49 @@
-use actix_web::{web, App, HttpRequest, HttpServer, Responder};
-use solver::Solver;
-use std::sync::Arc;
+use log::{error, info};
+use parachain_client::ParachainClient;
+use solver::solve;
+use std::{env, time::Duration};
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| {
-        let app_state = AppState {
-            solver: Arc::new(Solver::new()),
+#[tokio::main]
+async fn main() {
+    env_logger::init();
+
+    let poll_market_secs: u64 = env::var("POLL_MARKET_FREQ_SECS")
+        .expect("POLL_MARKET_FREQ_SECS not provided")
+        .parse()
+        .expect("POLL_MARKET_FREQ_SECS is not u64");
+    let poll_freq = Duration::from_secs(poll_market_secs);
+    let rpc_client_addr = env::var("RPC_ADDRESS").expect("RPC_ADDRESS not provided");
+    let parachain_client = ParachainClient::new(&rpc_client_addr)
+        .await
+        .expect("failed to create parachain client");
+
+    loop {
+        info!("Poll market state");
+        match parachain_client.get_market_state().await {
+            Ok(state) => {
+                info!("market state {state:?}");
+                match solve(state.bids, state.asks, state.periods) {
+                    Ok(solution) => {
+                        info!("solution {solution:?}");
+                        match parachain_client.submit_solution(solution).await {
+                            Ok(hash) => {
+                                info!("submit solution in {hash:?}");
+                            }
+                            Err(err) => {
+                                error!("failed to submit solution, err: {err:?}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("failed to get solution, err: {err:?}")
+                    }
+                };
+            }
+            Err(err) => {
+                error!("failed to get market state, err: {err:?}");
+            }
         };
 
-        App::new()
-            .configure(configure_route)
-            .app_data(web::Data::new(app_state))
-    })
-    .bind(("127.0.0.1", 8080))?
-    .run()
-    .await
-}
-
-// this function could be located in a different module
-fn configure_route(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::resource("/submit").route(web::get().to(submit)));
-}
-
-#[derive(Clone)]
-struct AppState {
-    solver: Arc<Solver>,
-}
-
-async fn submit(_req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
-    state.solver.submit()
+        tokio::time::sleep(poll_freq).await;
+    }
 }
