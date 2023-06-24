@@ -43,9 +43,9 @@ impl MarketState {
 #[derive(Debug)]
 pub struct MarketSolution {
     // For each account, track if the bids are accepted
-    pub bids: Vec<(ProductId, SelectedFlexibleLoad)>,
+    pub bids: Vec<AcceptedProduct>,
     // For each account, track if the asks are accepted
-    pub asks: Vec<(ProductId, SelectedFlexibleLoad)>,
+    pub asks: Vec<AcceptedProduct>,
     // Auction price for each period
     pub auction_prices: Vec<u64>,
 }
@@ -53,10 +53,10 @@ pub struct MarketSolution {
 impl MarketSolution {
     pub fn no_solution(&self) -> bool {
         if !self.bids.is_empty() {
-            return false
+            return false;
         }
         if !self.asks.is_empty() {
-            return false
+            return false;
         }
         for p in self.auction_prices.iter() {
             if *p > 0 {
@@ -73,6 +73,26 @@ pub struct Product {
     pub quantity: u64,
     pub start_period: u32,
     pub end_period: u32,
+    pub can_partially_accept: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct AcceptedProduct {
+    pub id: ProductId,
+    pub load_index: SelectedFlexibleLoad,
+    // Percentage [0, 100] of quantity accepted from start to end period.
+    // We use an integer here because the runtime cannot perform floating point arithmetic.
+    pub percentage: u8,
+}
+
+impl Into<parachain::runtime_types::market_state::pallet::AcceptedProduct> for AcceptedProduct {
+    fn into(self) -> parachain::runtime_types::market_state::pallet::AcceptedProduct {
+        parachain::runtime_types::market_state::pallet::AcceptedProduct {
+            id: self.id,
+            load_index: self.load_index,
+            percentage: self.percentage,
+        }
+    }
 }
 
 pub type FlexibleProduct = Vec<Product>;
@@ -103,8 +123,8 @@ impl ParachainClient {
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
         let tx = parachain::tx().market_state().submit_solution(
             BoundedVec(solution.auction_prices),
-            BoundedVec(solution.bids),
-            BoundedVec(solution.asks),
+            BoundedVec(solution.bids.into_iter().map(|b| b.into()).collect()),
+            BoundedVec(solution.asks.into_iter().map(|a| a.into()).collect()),
         );
         let hash = self
             .parachain_api
