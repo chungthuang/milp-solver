@@ -61,14 +61,27 @@ pub fn solve(
     }
 
     for bid in bid_formulation.constraints.into_iter() {
+        debug!(
+            "Flexible bid sum to 1 constraint {:?}",
+            bid.sum_to_one_constraint
+        );
         model = model.with(bid.sum_to_one_constraint);
+        debug!("Flexible bid Big-M constraints {:?}", bid.big_m_constraints);
         for big_m in bid.big_m_constraints {
             model = model.with(big_m);
         }
     }
 
     for offer in offer_formulation.constraints.into_iter() {
+        debug!(
+            "Flexible offer sum to 1 constraint {:?}",
+            offer.sum_to_one_constraint
+        );
         model = model.with(offer.sum_to_one_constraint);
+        debug!(
+            "Flexible offer Big-M constraints {:?}",
+            offer.big_m_constraints
+        );
         for big_m in offer.big_m_constraints {
             model = model.with(big_m);
         }
@@ -157,15 +170,19 @@ fn formulate_per_product(
         } else {
             vars.add(variable().binary())
         };
+        accepted_perct.push(perct);
+        // perct = 0, selected_flex_load = 0 -> 0 <= 0
+        // But perct = 0, selected_flex_load = 1 -> 0 <= 1
+        big_m_constraints.push(perct.into_expression().leq(selected));
+        // So we need another constraint
+        // If selected_flex_load = 0, perct will have to > 0
         big_m_constraints.push(
-            perct
+            selected
                 .into_expression()
-                .leq(selected.mul(PERCENTAGE_UPPER_BOUND)),
+                .leq(perct.mul(PERCENTAGE_UPPER_BOUND)),
         );
 
         for period in product.start_period..product.end_period {
-            accepted_perct.push(perct);
-
             let quantity = perct.mul(product.quantity as f64);
             quantities_by_period[period as usize].add_assign(quantity.clone());
             welfare.add_assign(quantity.mul(product.price as f64));
@@ -193,8 +210,10 @@ fn evaluate(
 ) -> Result<MarketSolution, Error> {
     let bids_solutions =
         evaluate_product_decisions(&sol, bids, bid_vars, ProductType::Bid, periods)?;
+    debug!("Bid solutions {:?}", bids_solutions);
     let asks_solutions =
         evaluate_product_decisions(&sol, offers, offer_vars, ProductType::Offer, periods)?;
+    debug!("Ask solutions {:?}", asks_solutions);
 
     let mut auction_prices = Vec::with_capacity(periods);
     for (period, (min_bid_price, max_ask_price)) in bids_solutions
@@ -204,7 +223,7 @@ fn evaluate(
         .enumerate()
     {
         debug!(
-            "Period {}: Min bid price {}, max ask price at period {}",
+            "Period {}: Min bid price {}, max ask price {}",
             period, min_bid_price, max_ask_price
         );
         if *min_bid_price < max_ask_price {
@@ -237,6 +256,7 @@ fn evaluate(
     })
 }
 
+#[derive(Debug)]
 struct ProductDecisions {
     solutions: Vec<AcceptedProduct>,
     // Auction price by period
@@ -272,6 +292,10 @@ fn evaluate_product_decisions(
             let accepted = sol.value(decisions.selected_flex_load[schedule_index]);
             let perct = sol.value(decisions.percentage[schedule_index]);
 
+            println!(
+                "decisions {:?}, accepted {}",
+                decisions.selected_flex_load[schedule_index], accepted
+            );
             if accepted != DECISION_ACCEPTED {
                 assert_eq!(perct, 0.);
                 continue;
@@ -338,6 +362,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
         let ask_1 = (
@@ -347,6 +372,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
 
@@ -358,6 +384,7 @@ mod tests {
                 quantity: 2,
                 start_period: 3,
                 end_period: 4,
+                can_partially_accept: false,
             }),
         );
         let ask_2 = (
@@ -367,6 +394,7 @@ mod tests {
                 quantity: 2,
                 start_period: 3,
                 end_period: 4,
+                can_partially_accept: false,
             }),
         );
 
@@ -378,15 +406,15 @@ mod tests {
         assert_eq!(
             solution.bids,
             vec![
-                (bid_1.0, selected_load_index(0)),
-                (bid_2.0, selected_load_index(0))
+                accept_product(bid_1.0, 0, 100),
+                accept_product(bid_2.0, 0, 100)
             ]
         );
         assert_eq!(
             solution.asks,
             vec![
-                (ask_1.0, selected_load_index(0)),
-                (ask_2.0, selected_load_index(0)),
+                accept_product(ask_1.0, 0, 100),
+                accept_product(ask_2.0, 0, 100),
             ]
         );
         assert_eq!(
@@ -404,6 +432,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
         let ask_1 = (
@@ -413,6 +442,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
 
@@ -424,6 +454,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
         let ask_2 = (
@@ -433,6 +464,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
 
@@ -443,8 +475,8 @@ mod tests {
         // bid_2 will match with ask_1, because the social welfare would be 7 * 5 - 6 * 5 = 5
         // if bid_1 matches with ask_1 and bid_2 matches with ask_2, than the social welfare would be 0
         let solution = solve(bids, asks, 3).unwrap();
-        assert_eq!(solution.bids, vec![(bid_2.0, selected_load_index(0))]);
-        assert_eq!(solution.asks, vec![(ask_1.0, selected_load_index(0))]);
+        assert_eq!(solution.bids, vec![accept_product(bid_2.0, 0, 100)]);
+        assert_eq!(solution.asks, vec![accept_product(ask_1.0, 0, 100)]);
         assert_eq!(solution.auction_prices, vec![0, bid_2_price, 0])
     }
     /*
@@ -557,6 +589,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 3,
+                can_partially_accept: false,
             }),
         );
 
@@ -568,6 +601,7 @@ mod tests {
                 quantity: 2,
                 start_period: 5,
                 end_period: 7,
+                can_partially_accept: false,
             }),
         );
 
@@ -578,6 +612,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 3,
+                can_partially_accept: false,
             }),
         );
         let ask_2 = (
@@ -587,6 +622,7 @@ mod tests {
                 quantity: 2,
                 start_period: 5,
                 end_period: 7,
+                can_partially_accept: false,
             }),
         );
 
@@ -598,15 +634,15 @@ mod tests {
         assert_eq!(
             solution.bids,
             vec![
-                (bid_1.0, selected_load_index(0)),
-                (bid_2.0, selected_load_index(0))
+                accept_product(bid_1.0, 0, 100),
+                accept_product(bid_2.0, 0, 100)
             ]
         );
         assert_eq!(
             solution.asks,
             vec![
-                (ask_1.0, selected_load_index(0)),
-                (ask_2.0, selected_load_index(0)),
+                accept_product(ask_1.0, 0, 100),
+                accept_product(ask_2.0, 0, 100),
             ]
         );
         assert_eq!(
@@ -624,6 +660,7 @@ mod tests {
                 quantity: 5,
                 start_period: 1,
                 end_period: 4,
+                can_partially_accept: false,
             }),
         );
         let bid_2 = (
@@ -633,6 +670,7 @@ mod tests {
                 quantity: 2,
                 start_period: 2,
                 end_period: 5,
+                can_partially_accept: false,
             }),
         );
 
@@ -643,6 +681,7 @@ mod tests {
                 quantity: 7,
                 start_period: 1,
                 end_period: 5,
+                can_partially_accept: false,
             }),
         );
 
@@ -661,6 +700,7 @@ mod tests {
                 quantity: 2,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }),
         );
         let bid_4 = (
@@ -670,6 +710,7 @@ mod tests {
                 quantity: 5,
                 start_period: 4,
                 end_period: 5,
+                can_partially_accept: false,
             }),
         );
 
@@ -679,13 +720,13 @@ mod tests {
         assert_eq!(
             solution.bids,
             vec![
-                (bid_1.0, selected_load_index(0)),
-                (bid_2.0, selected_load_index(0)),
-                (bid_3.0, selected_load_index(0)),
-                (bid_4.0, selected_load_index(0)),
+                accept_product(bid_1.0, 0, 100),
+                accept_product(bid_2.0, 0, 100),
+                accept_product(bid_3.0, 0, 100),
+                accept_product(bid_4.0, 0, 100),
             ]
         );
-        assert_eq!(solution.asks, vec![(ask_1.0, selected_load_index(0))]);
+        assert_eq!(solution.asks, vec![accept_product(ask_1.0, 0, 100)]);
         assert_eq!(solution.auction_prices, vec![0, 5, 5, 5, 6])
     }
 
@@ -699,12 +740,14 @@ mod tests {
                     quantity: 5,
                     start_period: 0,
                     end_period: 2,
+                    can_partially_accept: false,
                 },
                 Product {
                     price: 16,
                     quantity: 6,
                     start_period: 3,
                     end_period: 5,
+                    can_partially_accept: false,
                 },
             ],
         );
@@ -715,6 +758,7 @@ mod tests {
                 quantity: 6,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }],
         );
 
@@ -725,6 +769,7 @@ mod tests {
                 quantity: 5,
                 start_period: 2,
                 end_period: 4,
+                can_partially_accept: false,
             }],
         );
 
@@ -736,12 +781,14 @@ mod tests {
                     quantity: 6,
                     start_period: 0,
                     end_period: 4,
+                    can_partially_accept: false,
                 },
                 Product {
                     price: 14,
                     quantity: 5,
                     start_period: 0,
                     end_period: 4,
+                    can_partially_accept: false,
                 },
             ],
         );
@@ -753,6 +800,7 @@ mod tests {
                 quantity: 4,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }],
         );
 
@@ -763,6 +811,7 @@ mod tests {
                 quantity: 2,
                 start_period: 1,
                 end_period: 2,
+                can_partially_accept: false,
             }],
         );
 
@@ -773,6 +822,7 @@ mod tests {
                 quantity: 3,
                 start_period: 3,
                 end_period: 5,
+                can_partially_accept: false,
             }],
         );
 
@@ -789,20 +839,65 @@ mod tests {
         assert_eq!(
             solution.bids,
             vec![
-                (alice_bid.0, selected_load_index(0)),
-                (bob_bid.0, selected_load_index(0)),
-                (daniela_bid.0, selected_load_index(0)),
-                (ella_bid.0, selected_load_index(0)),
+                accept_product(alice_bid.0, 0, 100),
+                accept_product(bob_bid.0, 0, 100),
+                accept_product(daniela_bid.0, 0, 100),
+                accept_product(ella_bid.0, 0, 100),
             ]
         );
         assert_eq!(
             solution.asks,
             vec![
-                (alice_ask.0, selected_load_index(0)),
-                (charlie_ask.0, selected_load_index(1))
+                accept_product(alice_ask.0, 0, 100),
+                accept_product(charlie_ask.0, 1, 100)
             ]
         );
         assert_eq!(solution.auction_prices, vec![20, 15, 18, 18, 0, 0])
+    }
+
+    #[test]
+    fn test_solve_simple_partial_products() {
+        let bid_quantity = 5;
+        let mut bid = (
+            product_id(1),
+            fixed_load(Product {
+                price: 5,
+                quantity: bid_quantity,
+                start_period: 0,
+                end_period: 3,
+                can_partially_accept: false,
+            }),
+        );
+
+        let ask_quantity = 7;
+        let mut ask = (
+            product_id(2),
+            fixed_load(Product {
+                price: 4,
+                quantity: ask_quantity,
+                start_period: 0,
+                end_period: 3,
+                can_partially_accept: false,
+            }),
+        );
+
+        let solution = solve(vec![bid.clone()], vec![ask.clone()], 3).unwrap();
+        assert!(solution.no_solution());
+
+        bid.1[0].can_partially_accept = true;
+        ask.1[0].can_partially_accept = true;
+
+        let solution = solve(vec![bid.clone()], vec![ask.clone()], 3).unwrap();
+        assert_eq!(solution.bids, vec![accept_product(bid.0, 0, 100),]);
+        assert_eq!(
+            solution.asks,
+            vec![accept_product(
+                ask.0,
+                0,
+                (bid_quantity * 100 / ask_quantity) as u8
+            ),]
+        );
+        assert_eq!(solution.auction_prices, vec![5, 5, 5])
     }
 
     // Helper function for readability
@@ -810,12 +905,19 @@ mod tests {
         id
     }
 
-    // Helper function for readability
-    fn selected_load_index(id: u32) -> SelectedFlexibleLoad {
-        id
-    }
-
     fn fixed_load(product: Product) -> FlexibleProduct {
         vec![product]
+    }
+
+    fn accept_product(
+        id: ProductId,
+        load: SelectedFlexibleLoad,
+        percentage: u8,
+    ) -> AcceptedProduct {
+        AcceptedProduct {
+            id,
+            load_index: load,
+            percentage,
+        }
     }
 }
