@@ -12,3 +12,4 @@ log = { workspace = true }
 parachain-client = { path = "../../lib/parachain-client" }
 solver = { path = "../../lib/solver" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+uuid = { workspace = true , features = ["serde", "v4"], default-features = false }

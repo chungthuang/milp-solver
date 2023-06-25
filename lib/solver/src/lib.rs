@@ -1,5 +1,9 @@
+extern crate core;
+
 pub mod error;
 
+use core::fmt;
+use std::fmt::Formatter;
 use std::ops::{AddAssign, Mul, Sub};
 
 use crate::error::Error;
@@ -13,7 +17,6 @@ use log::debug;
 use parachain_client::{
     AcceptedProduct, FlexibleProduct, MarketSolution, ProductId, SelectedFlexibleLoad,
 };
-use uuid::Uuid;
 
 const DECISION_ACCEPTED: f64 = 1.;
 // Used in Big-M constraint for selecting only 1 flexible product
@@ -25,31 +28,59 @@ enum ProductType {
     Offer,
 }
 
+impl fmt::Display for ProductType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bid => write!(f, "bid"),
+            Self::Offer => write!(f, "offer"),
+        }
+    }
+}
+
 pub fn solve(
     bids: Vec<(ProductId, FlexibleProduct)>,
     offers: Vec<(ProductId, FlexibleProduct)>,
     periods: u32,
+    feed_in_tarrif: f64,
+    grid_price: f64,
+    solution_id: &str,
 ) -> Result<MarketSolution, Error> {
     // Indicators for flexible load constraint and percentage of a product that's accepted
     let mut vars = ProblemVariables::new();
+    let auction_price_vars = vars.add_vector(variable().min(0), periods as usize);
 
-    let bid_formulation = formulate(&mut vars, &bids, periods as usize);
-    let offer_formulation = formulate(&mut vars, &offers, periods as usize);
+    let bid_formulation = formulate(
+        &mut vars,
+        &auction_price_vars,
+        &bids,
+        ProductType::Bid,
+        periods as usize,
+        grid_price,
+    );
+    debug!("Utilities {:?}", bid_formulation.welfare);
+    let offer_formulation = formulate(
+        &mut vars,
+        &auction_price_vars,
+        &offers,
+        ProductType::Offer,
+        periods as usize,
+        feed_in_tarrif,
+    );
+    debug!("Costs {:?}", offer_formulation.welfare);
 
     let social_welfare: Expression = bid_formulation.welfare.sub(offer_formulation.welfare);
     debug!("social welfare {:?}", social_welfare);
 
-    let problem_id = Uuid::new_v4();
-    debug!("Problem ID {:?}", problem_id);
-    let cbc_solver =
-        LpSolver(CbcSolver::new().with_temp_solution_file(format!("/tmp/milp_{}.sol", problem_id)));
+    let cbc_solver = LpSolver(
+        CbcSolver::new().with_temp_solution_file(format!("/tmp/milp_{}.sol", solution_id)),
+    );
 
     let mut model = vars.maximise(social_welfare).using(cbc_solver);
 
     for (period, (bids_quantities, asks_quantities)) in bid_formulation
-        .quantities
+        .quantities_by_period
         .into_iter()
-        .zip(offer_formulation.quantities)
+        .zip(offer_formulation.quantities_by_period)
         .enumerate()
     {
         let quantity_match = bids_quantities.sub(asks_quantities);
@@ -60,6 +91,20 @@ pub fn solve(
         model = model.with(quantity_match.eq(0));
     }
 
+    /*for (period, (utility, cost)) in bid_formulation
+        .welfare_by_period
+        .into_iter()
+        .zip(offer_formulation.welfare_by_period)
+        .enumerate()
+    {
+        let welfare = utility.sub(cost);
+        debug!(
+            "Period {}: positive welfare constraint {:?}",
+            period, welfare
+        );
+        model = model.with(welfare.geq(0));
+    }*/
+
     for bid in bid_formulation.constraints.into_iter() {
         debug!(
             "Flexible bid sum to 1 constraint {:?}",
@@ -69,6 +114,9 @@ pub fn solve(
         debug!("Flexible bid Big-M constraints {:?}", bid.big_m_constraints);
         for big_m in bid.big_m_constraints {
             model = model.with(big_m);
+        }
+        for auction_price in bid.auction_price_constraints {
+            model = model.with(auction_price);
         }
     }
 
@@ -85,11 +133,21 @@ pub fn solve(
         for big_m in offer.big_m_constraints {
             model = model.with(big_m);
         }
+        for auction_price in offer.auction_price_constraints {
+            model = model.with(auction_price);
+        }
     }
 
     let sol = model
         .solve()
         .map_err(|err| Error::Solver(err.to_string()))?;
+
+    for i in 0..periods {
+        debug!(
+            "Period {i} auction price {}",
+            sol.value(auction_price_vars[i as usize])
+        );
+    }
 
     evaluate(
         sol,
@@ -105,7 +163,7 @@ struct ProblemFormulation {
     vars: Vec<FlexibleProductVars>,
     constraints: Vec<FlexibleProductConstraints>,
     // A vector of bid/ask quantities for each period
-    quantities: Vec<Expression>,
+    quantities_by_period: Vec<Expression>,
     // Utility/cost
     welfare: Expression,
 }
@@ -123,59 +181,91 @@ struct FlexibleProductConstraints {
     // Big-M makes sure selected_flex_load = 1 when percentage > 0
     // https://docs.mosek.com/modeling-cookbook/mio.html#integer-modeling
     big_m_constraints: Vec<Constraint>,
+    // For bids, the auction price has be lower than the bid price if it's accepted
+    // For offers, the auction price has to higher than the bid price if it's accepted
+    auction_price_constraints: Vec<Constraint>,
 }
 
 /// Add decision variables for products to vars, return the decision variables
 fn formulate(
     vars: &mut ProblemVariables,
+    auction_price_vars: &[Variable],
     products: &[(ProductId, FlexibleProduct)],
+    product_type: ProductType,
     periods: usize,
+    price_bound: f64,
 ) -> ProblemFormulation {
     let mut product_vars = Vec::with_capacity(products.len());
     let mut product_constraints = Vec::with_capacity(products.len());
-    let mut quantities: Vec<Expression> = Vec::with_capacity(periods as usize);
+    let mut quantities_by_period: Vec<Expression> = Vec::with_capacity(periods as usize);
     for _ in 0..periods {
-        quantities.push(Expression::default());
+        quantities_by_period.push(Expression::default());
     }
     let mut welfare = Expression::default();
-    for (_id, flexible_product) in products.iter() {
-        let (per_product_vars, per_product_constraints) =
-            formulate_per_product(vars, &mut quantities, &mut welfare, flexible_product);
+    for (id, flexible_product) in products.iter() {
+        let (per_product_vars, per_product_constraints) = formulate_per_product(
+            vars,
+            auction_price_vars,
+            &mut quantities_by_period,
+            &mut welfare,
+            id,
+            flexible_product,
+            product_type,
+            price_bound,
+        );
         product_vars.push(per_product_vars);
         product_constraints.push(per_product_constraints);
     }
     ProblemFormulation {
         vars: product_vars,
         constraints: product_constraints,
-        quantities,
+        quantities_by_period,
         welfare,
     }
 }
 
 fn formulate_per_product(
     vars: &mut ProblemVariables,
+    auction_price_vars: &[Variable],
     quantities_by_period: &mut Vec<Expression>,
-    welfare: &mut Expression,
+    total_welfare: &mut Expression,
+    product_id: &ProductId,
     flex_product: &FlexibleProduct,
+    product_type: ProductType,
+    price_bound: f64,
 ) -> (FlexibleProductVars, FlexibleProductConstraints) {
-    let selected_flex_load = vars.add_vector(variable().binary(), flex_product.len());
-    let sum_to_one_constraint = selected_flex_load.iter().sum::<Expression>().leq(1);
-    // Per product in flexible
+    let mut selected_flex_load: Vec<Variable> = Vec::new();
     let mut accepted_perct: Vec<Variable> = Vec::new();
     let mut big_m_constraints: Vec<Constraint> = Vec::new();
+    let mut auction_price_constraints: Vec<Constraint> = Vec::new();
 
-    for (product, selected) in flex_product.iter().zip(selected_flex_load.iter()) {
+    for product in flex_product.iter() {
+        let selected = vars.add(
+            variable()
+                .binary()
+                .name(format!("{}_selected_{}", product_type, product_id)),
+        );
+        selected_flex_load.push(selected);
         let perct = if product.can_partially_accept {
-            vars.add(variable().clamp(0, 1))
+            vars.add(
+                variable()
+                    .clamp(0, 1)
+                    .name(format!("{}_percentage_{}", product_type, product_id)),
+            )
         } else {
-            vars.add(variable().binary())
+            vars.add(
+                variable()
+                    .binary()
+                    .name(format!("{}all_or_none_{}", product_type, product_id)),
+            )
         };
         accepted_perct.push(perct);
         // perct = 0, selected_flex_load = 0 -> 0 <= 0
         // But perct = 0, selected_flex_load = 1 -> 0 <= 1
         big_m_constraints.push(perct.into_expression().leq(selected));
         // So we need another constraint
-        // If selected_flex_load = 0, perct will have to > 0
+        // If perct = 0, selected_flex_load = 0
+        // If perct > 0, selected_flex_load = 1
         big_m_constraints.push(
             selected
                 .into_expression()
@@ -183,11 +273,22 @@ fn formulate_per_product(
         );
 
         for period in product.start_period..product.end_period {
-            let quantity = perct.mul(product.quantity as f64);
-            quantities_by_period[period as usize].add_assign(quantity.clone());
-            welfare.add_assign(quantity.mul(product.price as f64));
+            let period = period as usize;
+            let ap_constraint = match product_type {
+                ProductType::Bid => auction_price_vars[period]
+                    .into_expression()
+                    .leq(selected.mul(product.price) + (1 - selected) * price_bound),
+                ProductType::Offer => auction_price_vars[period]
+                    .into_expression()
+                    .geq(selected.mul(product.price)),
+            };
+            auction_price_constraints.push(ap_constraint);
+            let quantity = perct.mul(product.quantity);
+            quantities_by_period[period].add_assign(quantity.clone());
+            total_welfare.add_assign(quantity.mul(product.price));
         }
     }
+    let sum_to_one_constraint = selected_flex_load.iter().sum::<Expression>().leq(1);
     (
         FlexibleProductVars {
             selected_flex_load,
@@ -196,6 +297,7 @@ fn formulate_per_product(
         FlexibleProductConstraints {
             sum_to_one_constraint,
             big_m_constraints,
+            auction_price_constraints,
         },
     )
 }
@@ -356,6 +458,9 @@ mod tests {
     use parachain_client::Product;
     use test_log::test;
 
+    const FEED_IN_TARIFF: f64 = 1.;
+    const GRID_PRICE: f64 = 20.;
+
     // Evaluate solution for single period products
     #[test]
     fn test_solve_single_products() {
@@ -407,7 +512,15 @@ mod tests {
 
         let asks = vec![ask_1.clone(), ask_2.clone()];
 
-        let solution = solve(bids, asks, 5).unwrap();
+        let solution = solve(
+            bids,
+            asks,
+            5,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_single_products",
+        )
+        .unwrap();
         assert_eq!(
             solution.bids,
             vec![
@@ -479,7 +592,15 @@ mod tests {
 
         // bid_2 will match with ask_1, because the social welfare would be 7 * 5 - 6 * 5 = 5
         // if bid_1 matches with ask_1 and bid_2 matches with ask_2, than the social welfare would be 0
-        let solution = solve(bids, asks, 3).unwrap();
+        let solution = solve(
+            bids,
+            asks,
+            3,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_single_products_max_social_welfare",
+        )
+        .unwrap();
         assert_eq!(solution.bids, vec![accept_product(bid_2.0, 0, 100)]);
         assert_eq!(solution.offers, vec![accept_product(ask_1.0, 0, 100)]);
         assert_eq!(solution.auction_prices, vec![0., bid_2_price, 0.])
@@ -635,7 +756,15 @@ mod tests {
 
         let asks = vec![ask_1.clone(), ask_2.clone()];
 
-        let solution = solve(bids, asks, 7).unwrap();
+        let solution = solve(
+            bids,
+            asks,
+            7,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_continuous_products",
+        )
+        .unwrap();
         assert_eq!(
             solution.bids,
             vec![
@@ -652,7 +781,15 @@ mod tests {
         );
         assert_eq!(
             solution.auction_prices,
-            vec![0., bid_1_price, bid_1_price, 0., 0., bid_2_price, bid_2_price]
+            vec![
+                0.,
+                bid_1_price,
+                bid_1_price,
+                0.,
+                0.,
+                bid_2_price,
+                bid_2_price
+            ]
         )
     }
 
@@ -694,7 +831,15 @@ mod tests {
 
         let asks = vec![ask_1.clone()];
 
-        let solution = solve(bids, asks.clone(), 5).unwrap();
+        let solution = solve(
+            bids,
+            asks.clone(),
+            5,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_overlapping_continuous_products",
+        )
+        .unwrap();
         // No enough bid quantity to match ask_1 at period 1
         assert!(solution.no_solution());
 
@@ -721,7 +866,15 @@ mod tests {
 
         let bids = vec![bid_1.clone(), bid_2.clone(), bid_3.clone(), bid_4.clone()];
 
-        let solution = solve(bids.clone(), asks, 5).unwrap();
+        let solution = solve(
+            bids.clone(),
+            asks,
+            5,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_overlapping_continuous_products",
+        )
+        .unwrap();
         assert_eq!(
             solution.bids,
             vec![
@@ -840,7 +993,15 @@ mod tests {
 
         let asks = vec![alice_ask.clone(), charlie_ask.clone(), ella_ask.clone()];
 
-        let solution = solve(bids, asks, 6).unwrap();
+        let solution = solve(
+            bids,
+            asks,
+            6,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_flexible_products",
+        )
+        .unwrap();
         assert_eq!(
             solution.bids,
             vec![
@@ -886,13 +1047,29 @@ mod tests {
             }),
         );
 
-        let solution = solve(vec![bid.clone()], vec![ask.clone()], 3).unwrap();
+        let solution = solve(
+            vec![bid.clone()],
+            vec![ask.clone()],
+            3,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_simple_partial_products",
+        )
+        .unwrap();
         assert!(solution.no_solution());
 
         bid.1[0].can_partially_accept = true;
         ask.1[0].can_partially_accept = true;
 
-        let solution = solve(vec![bid.clone()], vec![ask.clone()], 3).unwrap();
+        let solution = solve(
+            vec![bid.clone()],
+            vec![ask.clone()],
+            3,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_solve_simple_partial_products",
+        )
+        .unwrap();
         assert_eq!(solution.bids, vec![accept_product(bid.0, 0, 100),]);
         assert_eq!(
             solution.offers,
@@ -1192,8 +1369,8 @@ mod tests {
             fixed_load(Product {
                 price: 13.5,
                 quantity: 1.63,
-                start_period: 1,
-                end_period: 2,
+                start_period: 2,
+                end_period: 3,
                 can_partially_accept: true,
             }),
         );
@@ -1204,8 +1381,8 @@ mod tests {
             fixed_load(Product {
                 price: 13.5,
                 quantity: 1.63,
-                start_period: 1,
-                end_period: 2,
+                start_period: 3,
+                end_period: 4,
                 can_partially_accept: true,
             }),
         );
@@ -1223,10 +1400,37 @@ mod tests {
         );
         bids.push(account6_b1);
 
-        let solution = solve(bids, offers, 4).unwrap();
-        assert_eq!(solution.bids, vec![]);
-        assert_eq!(solution.offers, vec![],);
-        assert_eq!(solution.auction_prices, vec![5., 5., 5., 5.])
+        let solution = solve(
+            bids,
+            offers,
+            4,
+            FEED_IN_TARIFF,
+            GRID_PRICE,
+            "test_data_from_paper",
+        )
+        .unwrap();
+        assert_eq!(solution.bids, vec![
+            accept_product(3, 0, 100),
+            accept_product(4, 0, 100),
+            accept_product(6, 0, 100),
+            accept_product(9, 0, 100),
+            accept_product(10, 0, 100),
+            accept_product(11, 0, 100),
+            accept_product(12, 0, 100),
+        ]);
+        assert_eq!(solution.offers, vec![
+            accept_product(1, 0, 100),
+            accept_product(2, 0, 100),
+            accept_product(3, 0, 75),
+            accept_product(4, 0, 100),
+            accept_product(5, 0, 100),
+            accept_product(6, 0, 38),
+            accept_product(7, 0, 100),
+            accept_product(8, 0, 100),
+            accept_product(9, 0, 10),
+            accept_product(12, 0, 50),
+        ]);
+        assert_eq!(solution.auction_prices, vec![13.5, 7.7, 9.9, 13.5])
     }
 
     // Helper function for readability
