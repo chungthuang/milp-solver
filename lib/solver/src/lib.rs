@@ -237,13 +237,22 @@ fn evaluate(
 
     for (period, (bid_quantity, ask_quantity)) in bids_solutions
         .quantities
-        .iter()
+        .into_iter()
         .zip(asks_solutions.quantities)
         .enumerate()
     {
-        if *bid_quantity != ask_quantity {
+        if bid_quantity == 0. && ask_quantity == 0. {
+            continue;
+        }
+        if bid_quantity / ask_quantity > 1.01 {
             return Err(Error::InvalidSolution(format!(
-                "Period {}: Total bid quantity {} != total ask quantity {}",
+                "Period {}: Total bid quantity {} / total ask quantity {} > 1.01",
+                period, bid_quantity, ask_quantity
+            )));
+        }
+        if bid_quantity / ask_quantity < 0.99 {
+            return Err(Error::InvalidSolution(format!(
+                "Period {}: Total bid quantity {} / total ask quantity {} < 0.99",
                 period, bid_quantity, ask_quantity
             )));
         }
@@ -350,12 +359,12 @@ mod tests {
     // Evaluate solution for single period products
     #[test]
     fn test_solve_single_products() {
-        let bid_1_price = 6;
+        let bid_1_price = 6.;
         let bid_1 = (
             product_id(1),
             fixed_load(Product {
                 price: bid_1_price,
-                quantity: 5,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -364,20 +373,20 @@ mod tests {
         let ask_1 = (
             product_id(2),
             fixed_load(Product {
-                price: 5,
-                quantity: 5,
+                price: 5.,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
             }),
         );
 
-        let bid_2_price = 8;
+        let bid_2_price = 8.;
         let bid_2 = (
             product_id(3),
             fixed_load(Product {
                 price: bid_2_price,
-                quantity: 2,
+                quantity: 2.,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: false,
@@ -386,8 +395,8 @@ mod tests {
         let ask_2 = (
             product_id(4),
             fixed_load(Product {
-                price: 7,
-                quantity: 2,
+                price: 7.,
+                quantity: 2.,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: false,
@@ -415,7 +424,7 @@ mod tests {
         );
         assert_eq!(
             solution.auction_prices,
-            vec![0, bid_1_price, 0, bid_2_price, 0]
+            vec![0., bid_1_price, 0., bid_2_price, 0.]
         )
     }
 
@@ -424,8 +433,8 @@ mod tests {
         let bid_1 = (
             product_id(1),
             fixed_load(Product {
-                price: 6,
-                quantity: 5,
+                price: 6.,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -434,20 +443,20 @@ mod tests {
         let ask_1 = (
             product_id(2),
             fixed_load(Product {
-                price: 6,
-                quantity: 5,
+                price: 6.,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
             }),
         );
 
-        let bid_2_price = 7;
+        let bid_2_price = 7.;
         let bid_2 = (
             product_id(3),
             fixed_load(Product {
                 price: bid_2_price,
-                quantity: 5,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -456,8 +465,8 @@ mod tests {
         let ask_2 = (
             product_id(4),
             fixed_load(Product {
-                price: 7,
-                quantity: 5,
+                price: 7.,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -473,7 +482,7 @@ mod tests {
         let solution = solve(bids, asks, 3).unwrap();
         assert_eq!(solution.bids, vec![accept_product(bid_2.0, 0, 100)]);
         assert_eq!(solution.offers, vec![accept_product(ask_1.0, 0, 100)]);
-        assert_eq!(solution.auction_prices, vec![0, bid_2_price, 0])
+        assert_eq!(solution.auction_prices, vec![0., bid_2_price, 0.])
     }
     /*
     #[test]
@@ -577,24 +586,24 @@ mod tests {
 
     #[test]
     fn test_solve_continuous_products() {
-        let bid_1_price = 5;
+        let bid_1_price = 5.;
         let bid_1 = (
             product_id(1),
             fixed_load(Product {
                 price: bid_1_price,
-                quantity: 5,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 3,
                 can_partially_accept: false,
             }),
         );
 
-        let bid_2_price = 7;
+        let bid_2_price = 7.;
         let bid_2 = (
             product_id(2),
             fixed_load(Product {
                 price: bid_2_price,
-                quantity: 2,
+                quantity: 2.,
                 start_period: 5,
                 end_period: 7,
                 can_partially_accept: false,
@@ -604,8 +613,8 @@ mod tests {
         let ask_1 = (
             product_id(3),
             fixed_load(Product {
-                price: 4,
-                quantity: 5,
+                price: 4.,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 3,
                 can_partially_accept: false,
@@ -614,8 +623,8 @@ mod tests {
         let ask_2 = (
             product_id(4),
             fixed_load(Product {
-                price: 6,
-                quantity: 2,
+                price: 6.,
+                quantity: 2.,
                 start_period: 5,
                 end_period: 7,
                 can_partially_accept: false,
@@ -643,7 +652,7 @@ mod tests {
         );
         assert_eq!(
             solution.auction_prices,
-            vec![0, bid_1_price, bid_1_price, 0, 0, bid_2_price, bid_2_price]
+            vec![0., bid_1_price, bid_1_price, 0., 0., bid_2_price, bid_2_price]
         )
     }
 
@@ -652,8 +661,8 @@ mod tests {
         let bid_1 = (
             product_id(1),
             fixed_load(Product {
-                price: 5,
-                quantity: 5,
+                price: 5.,
+                quantity: 5.,
                 start_period: 1,
                 end_period: 4,
                 can_partially_accept: false,
@@ -662,8 +671,8 @@ mod tests {
         let bid_2 = (
             product_id(2),
             fixed_load(Product {
-                price: 7,
-                quantity: 2,
+                price: 7.,
+                quantity: 2.,
                 start_period: 2,
                 end_period: 5,
                 can_partially_accept: false,
@@ -673,8 +682,8 @@ mod tests {
         let ask_1 = (
             product_id(3),
             fixed_load(Product {
-                price: 4,
-                quantity: 7,
+                price: 4.,
+                quantity: 7.,
                 start_period: 1,
                 end_period: 5,
                 can_partially_accept: false,
@@ -692,8 +701,8 @@ mod tests {
         let bid_3 = (
             product_id(4),
             fixed_load(Product {
-                price: 5,
-                quantity: 2,
+                price: 5.,
+                quantity: 2.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -702,8 +711,8 @@ mod tests {
         let bid_4 = (
             product_id(5),
             fixed_load(Product {
-                price: 6,
-                quantity: 5,
+                price: 6.,
+                quantity: 5.,
                 start_period: 4,
                 end_period: 5,
                 can_partially_accept: false,
@@ -723,7 +732,7 @@ mod tests {
             ]
         );
         assert_eq!(solution.offers, vec![accept_product(ask_1.0, 0, 100)]);
-        assert_eq!(solution.auction_prices, vec![0, 5, 5, 5, 6])
+        assert_eq!(solution.auction_prices, vec![0., 5., 5., 5., 6.])
     }
 
     #[test]
@@ -732,15 +741,15 @@ mod tests {
             product_id(1),
             vec![
                 Product {
-                    price: 20,
-                    quantity: 5,
+                    price: 20.,
+                    quantity: 5.,
                     start_period: 0,
                     end_period: 2,
                     can_partially_accept: false,
                 },
                 Product {
-                    price: 16,
-                    quantity: 6,
+                    price: 16.,
+                    quantity: 6.,
                     start_period: 3,
                     end_period: 5,
                     can_partially_accept: false,
@@ -750,8 +759,8 @@ mod tests {
         let alice_ask = (
             product_id(2),
             vec![Product {
-                price: 14,
-                quantity: 6,
+                price: 14.,
+                quantity: 6.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -761,8 +770,8 @@ mod tests {
         let bob_bid = (
             product_id(3),
             vec![Product {
-                price: 18,
-                quantity: 5,
+                price: 18.,
+                quantity: 5.,
                 start_period: 2,
                 end_period: 4,
                 can_partially_accept: false,
@@ -773,15 +782,15 @@ mod tests {
             product_id(4),
             vec![
                 Product {
-                    price: 12,
-                    quantity: 6,
+                    price: 12.,
+                    quantity: 6.,
                     start_period: 0,
                     end_period: 4,
                     can_partially_accept: false,
                 },
                 Product {
-                    price: 14,
-                    quantity: 5,
+                    price: 14.,
+                    quantity: 5.,
                     start_period: 0,
                     end_period: 4,
                     can_partially_accept: false,
@@ -792,8 +801,8 @@ mod tests {
         let daniela_bid = (
             product_id(5),
             vec![Product {
-                price: 17,
-                quantity: 4,
+                price: 17.,
+                quantity: 4.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -803,8 +812,8 @@ mod tests {
         let ella_bid = (
             product_id(6),
             vec![Product {
-                price: 15,
-                quantity: 2,
+                price: 15.,
+                quantity: 2.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: false,
@@ -814,8 +823,8 @@ mod tests {
         let ella_ask = (
             product_id(7),
             vec![Product {
-                price: 11,
-                quantity: 3,
+                price: 11.,
+                quantity: 3.,
                 start_period: 3,
                 end_period: 5,
                 can_partially_accept: false,
@@ -848,16 +857,16 @@ mod tests {
                 accept_product(charlie_ask.0, 1, 100)
             ]
         );
-        assert_eq!(solution.auction_prices, vec![20, 15, 18, 18, 0, 0])
+        assert_eq!(solution.auction_prices, vec![20., 15., 18., 18., 0., 0.])
     }
 
     #[test]
     fn test_solve_simple_partial_products() {
-        let bid_quantity = 5;
+        let bid_quantity = 5.;
         let mut bid = (
             product_id(1),
             fixed_load(Product {
-                price: 5,
+                price: 5.,
                 quantity: bid_quantity,
                 start_period: 0,
                 end_period: 3,
@@ -865,11 +874,11 @@ mod tests {
             }),
         );
 
-        let ask_quantity = 7;
+        let ask_quantity = 7.;
         let mut ask = (
             product_id(2),
             fixed_load(Product {
-                price: 4,
+                price: 4.,
                 quantity: ask_quantity,
                 start_period: 0,
                 end_period: 3,
@@ -890,10 +899,10 @@ mod tests {
             vec![accept_product(
                 ask.0,
                 0,
-                (bid_quantity * 100 / ask_quantity) as u8
+                (bid_quantity * 100. / ask_quantity).round() as u8
             ),]
         );
-        assert_eq!(solution.auction_prices, vec![5, 5, 5])
+        assert_eq!(solution.auction_prices, vec![5., 5., 5.])
     }
 
     // Data from table 3 of A novel decentralized platform for peer-to-peer energy trading market with
@@ -904,8 +913,8 @@ mod tests {
         let account1_p1_a1 = (
             product_id(1),
             fixed_load(Product {
-                price: 101,
-                quantity: 150,
+                price: 10.1,
+                quantity: 1.5,
                 start_period: 0,
                 end_period: 1,
                 can_partially_accept: true,
@@ -916,8 +925,8 @@ mod tests {
         let account1_p2_a1 = (
             product_id(2),
             fixed_load(Product {
-                price: 200,
-                quantity: 42,
+                price: 4.2,
+                quantity: 2.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -928,8 +937,8 @@ mod tests {
         let account1_p2_a2 = (
             product_id(3),
             fixed_load(Product {
-                price: 150,
-                quantity: 63,
+                price: 6.3,
+                quantity: 1.5,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -940,8 +949,8 @@ mod tests {
         let account1_p3_a1 = (
             product_id(4),
             fixed_load(Product {
-                price: 100,
-                quantity: 79,
+                price: 7.9,
+                quantity: 1.0,
                 start_period: 2,
                 end_period: 3,
                 can_partially_accept: true,
@@ -952,8 +961,8 @@ mod tests {
         let account1_p3_a2 = (
             product_id(5),
             fixed_load(Product {
-                price: 150,
-                quantity: 85,
+                price: 8.5,
+                quantity: 1.5,
                 start_period: 2,
                 end_period: 3,
                 can_partially_accept: true,
@@ -964,8 +973,8 @@ mod tests {
         let account1_p3_a3 = (
             product_id(6),
             fixed_load(Product {
-                price: 100,
-                quantity: 93,
+                price: 9.3,
+                quantity: 1.,
                 start_period: 2,
                 end_period: 3,
                 can_partially_accept: true,
@@ -976,8 +985,8 @@ mod tests {
         let account1_p4_a1 = (
             product_id(7),
             fixed_load(Product {
-                price: 50,
-                quantity: 58,
+                price: 5.8,
+                quantity: 0.5,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: true,
@@ -988,8 +997,8 @@ mod tests {
         let account1_p4_a2 = (
             product_id(8),
             fixed_load(Product {
-                price: 50,
-                quantity: 68,
+                price: 6.8,
+                quantity: 0.5,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: true,
@@ -1000,8 +1009,8 @@ mod tests {
         let account2_p1_a1 = (
             product_id(9),
             fixed_load(Product {
-                price: 125,
-                quantity: 120,
+                price: 12.,
+                quantity: 1.25,
                 start_period: 0,
                 end_period: 1,
                 can_partially_accept: true,
@@ -1012,8 +1021,8 @@ mod tests {
         let account2_p2_a1 = (
             product_id(10),
             fixed_load(Product {
-                price: 125,
-                quantity: 120,
+                price: 12.,
+                quantity: 1.25,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1024,8 +1033,8 @@ mod tests {
         let account2_p3_a1 = (
             product_id(11),
             fixed_load(Product {
-                price: 125,
-                quantity: 120,
+                price: 12.,
+                quantity: 1.25,
                 start_period: 2,
                 end_period: 3,
                 can_partially_accept: true,
@@ -1036,8 +1045,8 @@ mod tests {
         let account2_p4_a1 = (
             product_id(12),
             fixed_load(Product {
-                price: 125,
-                quantity: 120,
+                price: 12.,
+                quantity: 1.25,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: true,
@@ -1048,8 +1057,8 @@ mod tests {
         let account3_a1 = (
             product_id(13),
             fixed_load(Product {
-                price: 200,
-                quantity: 90,
+                price: 9.,
+                quantity: 2.,
                 start_period: 0,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1061,8 +1070,8 @@ mod tests {
         let account4_p1_b1 = (
             product_id(1),
             fixed_load(Product {
-                price: 100,
-                quantity: 77,
+                price: 7.7,
+                quantity: 1.,
                 start_period: 0,
                 end_period: 1,
                 can_partially_accept: true,
@@ -1073,8 +1082,8 @@ mod tests {
         let account4_p1_b2 = (
             product_id(2),
             fixed_load(Product {
-                price: 300,
-                quantity: 64,
+                price: 6.4,
+                quantity: 3.,
                 start_period: 0,
                 end_period: 1,
                 can_partially_accept: true,
@@ -1085,8 +1094,8 @@ mod tests {
         let account4_p2_b1 = (
             product_id(3),
             fixed_load(Product {
-                price: 100,
-                quantity: 87,
+                price: 8.7,
+                quantity: 1.,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1097,8 +1106,8 @@ mod tests {
         let account4_p2_b2 = (
             product_id(4),
             fixed_load(Product {
-                price: 50,
-                quantity: 77,
+                price: 7.7,
+                quantity: 0.5,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1109,8 +1118,8 @@ mod tests {
         let account4_p2_b3 = (
             product_id(5),
             fixed_load(Product {
-                price: 150,
-                quantity: 53,
+                price: 5.3,
+                quantity: 1.5,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1121,8 +1130,8 @@ mod tests {
         let account4_p3_b1 = (
             product_id(6),
             fixed_load(Product {
-                price: 125,
-                quantity: 99,
+                price: 9.9,
+                quantity: 1.25,
                 start_period: 2,
                 end_period: 3,
                 can_partially_accept: true,
@@ -1133,8 +1142,8 @@ mod tests {
         let account4_p4_b1 = (
             product_id(7),
             fixed_load(Product {
-                price: 200,
-                quantity: 72,
+                price: 7.2,
+                quantity: 2.,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: true,
@@ -1145,8 +1154,8 @@ mod tests {
         let account4_p4_b2 = (
             product_id(8),
             fixed_load(Product {
-                price: 50,
-                quantity: 63,
+                price: 6.3,
+                quantity: 0.5,
                 start_period: 3,
                 end_period: 4,
                 can_partially_accept: true,
@@ -1157,8 +1166,8 @@ mod tests {
         let account5_p1_b1 = (
             product_id(9),
             fixed_load(Product {
-                price: 163,
-                quantity: 135,
+                price: 13.5,
+                quantity: 1.63,
                 start_period: 0,
                 end_period: 1,
                 can_partially_accept: true,
@@ -1169,8 +1178,8 @@ mod tests {
         let account5_p2_b1 = (
             product_id(10),
             fixed_load(Product {
-                price: 163,
-                quantity: 135,
+                price: 13.5,
+                quantity: 1.63,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1181,8 +1190,8 @@ mod tests {
         let account5_p3_b1 = (
             product_id(11),
             fixed_load(Product {
-                price: 163,
-                quantity: 135,
+                price: 13.5,
+                quantity: 1.63,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1193,8 +1202,8 @@ mod tests {
         let account5_p4_b1 = (
             product_id(12),
             fixed_load(Product {
-                price: 163,
-                quantity: 135,
+                price: 13.5,
+                quantity: 1.63,
                 start_period: 1,
                 end_period: 2,
                 can_partially_accept: true,
@@ -1205,8 +1214,8 @@ mod tests {
         let account6_b1 = (
             product_id(13),
             fixed_load(Product {
-                price: 600,
-                quantity: 60,
+                price: 5.98,
+                quantity: 6.,
                 start_period: 2,
                 end_period: 4,
                 can_partially_accept: true,
@@ -1217,7 +1226,7 @@ mod tests {
         let solution = solve(bids, offers, 4).unwrap();
         assert_eq!(solution.bids, vec![]);
         assert_eq!(solution.offers, vec![],);
-        assert_eq!(solution.auction_prices, vec![5, 5, 5, 5])
+        assert_eq!(solution.auction_prices, vec![5., 5., 5., 5.])
     }
 
     // Helper function for readability
