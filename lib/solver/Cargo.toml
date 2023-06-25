@@ -9,7 +9,6 @@ log = { workspace = true }
 parachain-client = { path = "../parachain-client" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-uuid = { workspace = true , features = ["serde", "v4"], default-features = false }
 
 [dev-dependencies]
 env_logger = "0.10.0"

@@ -2,6 +2,7 @@ use log::{error, info};
 use parachain_client::ParachainClient;
 use solver::solve;
 use std::{env, time::Duration};
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
@@ -22,7 +23,17 @@ async fn main() {
         match parachain_client.get_market_state().await {
             Ok(state) => {
                 info!("market state {state:?}");
-                match solve(state.bids, state.asks, state.periods) {
+
+                let solution_id = Uuid::new_v4();
+                info!("Solution ID {:?}", solution_id);
+                match solve(
+                    state.bids,
+                    state.asks,
+                    state.periods,
+                    state.feed_in_tariff as f64,
+                    state.grid_price as f64,
+                    &solution_id.to_string(),
+                ) {
                     Ok(solution) => {
                         info!("solution {solution:?}");
                         match parachain_client.submit_solution(solution).await {
