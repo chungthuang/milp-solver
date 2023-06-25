@@ -45,9 +45,9 @@ pub struct MarketSolution {
     // For each account, track if the bids are accepted
     pub bids: Vec<AcceptedProduct>,
     // For each account, track if the asks are accepted
-    pub asks: Vec<AcceptedProduct>,
+    pub offers: Vec<AcceptedProduct>,
     // Auction price for each period
-    pub auction_prices: Vec<u64>,
+    pub auction_prices: Vec<f64>,
 }
 
 impl MarketSolution {
@@ -55,11 +55,11 @@ impl MarketSolution {
         if !self.bids.is_empty() {
             return false;
         }
-        if !self.asks.is_empty() {
+        if !self.offers.is_empty() {
             return false;
         }
         for p in self.auction_prices.iter() {
-            if *p > 0 {
+            if *p > 0. {
                 return false;
             }
         }
@@ -67,10 +67,10 @@ impl MarketSolution {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct Product {
-    pub price: u64,
-    pub quantity: u64,
+    pub price: f64,
+    pub quantity: f64,
     pub start_period: u32,
     pub end_period: u32,
     pub can_partially_accept: bool,
@@ -121,10 +121,17 @@ impl ParachainClient {
     }
 
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
+        let auction_prices = solution
+            .auction_prices
+            .iter()
+            .map(|p| p.round() as u64)
+            .collect();
+        let accepted_bids = solution.bids.into_iter().map(|b| b.into()).collect();
+        let accepted_offers = solution.offers.into_iter().map(|a| a.into()).collect();
         let tx = parachain::tx().market_state().submit_solution(
-            BoundedVec(solution.auction_prices),
-            BoundedVec(solution.bids.into_iter().map(|b| b.into()).collect()),
-            BoundedVec(solution.asks.into_iter().map(|a| a.into()).collect()),
+            BoundedVec(auction_prices),
+            BoundedVec(accepted_bids),
+            BoundedVec(accepted_offers),
         );
         let hash = self
             .parachain_api

@@ -251,7 +251,7 @@ fn evaluate(
 
     Ok(MarketSolution {
         bids: bids_solutions.solutions,
-        asks: asks_solutions.solutions,
+        offers: asks_solutions.solutions,
         auction_prices,
     })
 }
@@ -260,9 +260,9 @@ fn evaluate(
 struct ProductDecisions {
     solutions: Vec<AcceptedProduct>,
     // Auction price by period
-    auction_prices: Vec<u64>,
+    auction_prices: Vec<f64>,
     // Quantity by period
-    quantities: Vec<u64>,
+    quantities: Vec<f64>,
 }
 
 /// Decide if a product is accepted, and if so, which flexible load
@@ -274,11 +274,11 @@ fn evaluate_product_decisions(
     periods: usize,
 ) -> Result<ProductDecisions, Error> {
     let mut solutions: Vec<AcceptedProduct> = Vec::with_capacity(products.len());
-    let mut auction_prices: Vec<u64> = Vec::with_capacity(periods);
-    let mut quantities: Vec<u64> = Vec::with_capacity(periods);
+    let mut auction_prices: Vec<f64> = Vec::with_capacity(periods);
+    let mut quantities: Vec<f64> = Vec::with_capacity(periods);
     for _ in 0..periods {
-        auction_prices.push(0);
-        quantities.push(0);
+        auction_prices.push(0.);
+        quantities.push(0.);
     }
 
     assert_eq!(products.len(), decisions.len());
@@ -292,10 +292,6 @@ fn evaluate_product_decisions(
             let accepted = sol.value(decisions.selected_flex_load[schedule_index]);
             let perct = sol.value(decisions.percentage[schedule_index]);
 
-            println!(
-                "decisions {:?}, accepted {}",
-                decisions.selected_flex_load[schedule_index], accepted
-            );
             if accepted != DECISION_ACCEPTED {
                 assert_eq!(perct, 0.);
                 continue;
@@ -317,7 +313,7 @@ fn evaluate_product_decisions(
 
             for period in product.start_period..product.end_period {
                 let period = period as usize;
-                if auction_prices[period] == 0 {
+                if auction_prices[period] == 0. {
                     auction_prices[period] = product.price;
                 } else {
                     match product_type {
@@ -333,7 +329,7 @@ fn evaluate_product_decisions(
                         }
                     };
                 }
-                quantities[period] += (product.quantity as f64 * perct).round() as u64;
+                quantities[period] += product.quantity * perct
             }
         }
     }
@@ -411,7 +407,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            solution.asks,
+            solution.offers,
             vec![
                 accept_product(ask_1.0, 0, 100),
                 accept_product(ask_2.0, 0, 100),
@@ -476,7 +472,7 @@ mod tests {
         // if bid_1 matches with ask_1 and bid_2 matches with ask_2, than the social welfare would be 0
         let solution = solve(bids, asks, 3).unwrap();
         assert_eq!(solution.bids, vec![accept_product(bid_2.0, 0, 100)]);
-        assert_eq!(solution.asks, vec![accept_product(ask_1.0, 0, 100)]);
+        assert_eq!(solution.offers, vec![accept_product(ask_1.0, 0, 100)]);
         assert_eq!(solution.auction_prices, vec![0, bid_2_price, 0])
     }
     /*
@@ -639,7 +635,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            solution.asks,
+            solution.offers,
             vec![
                 accept_product(ask_1.0, 0, 100),
                 accept_product(ask_2.0, 0, 100),
@@ -726,7 +722,7 @@ mod tests {
                 accept_product(bid_4.0, 0, 100),
             ]
         );
-        assert_eq!(solution.asks, vec![accept_product(ask_1.0, 0, 100)]);
+        assert_eq!(solution.offers, vec![accept_product(ask_1.0, 0, 100)]);
         assert_eq!(solution.auction_prices, vec![0, 5, 5, 5, 6])
     }
 
@@ -846,7 +842,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            solution.asks,
+            solution.offers,
             vec![
                 accept_product(alice_ask.0, 0, 100),
                 accept_product(charlie_ask.0, 1, 100)
@@ -890,7 +886,7 @@ mod tests {
         let solution = solve(vec![bid.clone()], vec![ask.clone()], 3).unwrap();
         assert_eq!(solution.bids, vec![accept_product(bid.0, 0, 100),]);
         assert_eq!(
-            solution.asks,
+            solution.offers,
             vec![accept_product(
                 ask.0,
                 0,
@@ -898,6 +894,330 @@ mod tests {
             ),]
         );
         assert_eq!(solution.auction_prices, vec![5, 5, 5])
+    }
+
+    // Data from table 3 of A novel decentralized platform for peer-to-peer energy trading market with
+    // blockchain technology paper
+    #[test]
+    fn test_data_from_paper() {
+        let mut offers = Vec::new();
+        let account1_p1_a1 = (
+            product_id(1),
+            fixed_load(Product {
+                price: 101,
+                quantity: 150,
+                start_period: 0,
+                end_period: 1,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p1_a1);
+
+        let account1_p2_a1 = (
+            product_id(2),
+            fixed_load(Product {
+                price: 200,
+                quantity: 42,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p2_a1);
+
+        let account1_p2_a2 = (
+            product_id(3),
+            fixed_load(Product {
+                price: 150,
+                quantity: 63,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p2_a2);
+
+        let account1_p3_a1 = (
+            product_id(4),
+            fixed_load(Product {
+                price: 100,
+                quantity: 79,
+                start_period: 2,
+                end_period: 3,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p3_a1);
+
+        let account1_p3_a2 = (
+            product_id(5),
+            fixed_load(Product {
+                price: 150,
+                quantity: 85,
+                start_period: 2,
+                end_period: 3,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p3_a2);
+
+        let account1_p3_a3 = (
+            product_id(6),
+            fixed_load(Product {
+                price: 100,
+                quantity: 93,
+                start_period: 2,
+                end_period: 3,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p3_a3);
+
+        let account1_p4_a1 = (
+            product_id(7),
+            fixed_load(Product {
+                price: 50,
+                quantity: 58,
+                start_period: 3,
+                end_period: 4,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p4_a1);
+
+        let account1_p4_a2 = (
+            product_id(8),
+            fixed_load(Product {
+                price: 50,
+                quantity: 68,
+                start_period: 3,
+                end_period: 4,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account1_p4_a2);
+
+        let account2_p1_a1 = (
+            product_id(9),
+            fixed_load(Product {
+                price: 125,
+                quantity: 120,
+                start_period: 0,
+                end_period: 1,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account2_p1_a1);
+
+        let account2_p2_a1 = (
+            product_id(10),
+            fixed_load(Product {
+                price: 125,
+                quantity: 120,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account2_p2_a1);
+
+        let account2_p3_a1 = (
+            product_id(11),
+            fixed_load(Product {
+                price: 125,
+                quantity: 120,
+                start_period: 2,
+                end_period: 3,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account2_p3_a1);
+
+        let account2_p4_a1 = (
+            product_id(12),
+            fixed_load(Product {
+                price: 125,
+                quantity: 120,
+                start_period: 3,
+                end_period: 4,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account2_p4_a1);
+
+        let account3_a1 = (
+            product_id(13),
+            fixed_load(Product {
+                price: 200,
+                quantity: 90,
+                start_period: 0,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        offers.push(account3_a1);
+
+        let mut bids = Vec::new();
+        let account4_p1_b1 = (
+            product_id(1),
+            fixed_load(Product {
+                price: 100,
+                quantity: 77,
+                start_period: 0,
+                end_period: 1,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p1_b1);
+
+        let account4_p1_b2 = (
+            product_id(2),
+            fixed_load(Product {
+                price: 300,
+                quantity: 64,
+                start_period: 0,
+                end_period: 1,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p1_b2);
+
+        let account4_p2_b1 = (
+            product_id(3),
+            fixed_load(Product {
+                price: 100,
+                quantity: 87,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p2_b1);
+
+        let account4_p2_b2 = (
+            product_id(4),
+            fixed_load(Product {
+                price: 50,
+                quantity: 77,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p2_b2);
+
+        let account4_p2_b3 = (
+            product_id(5),
+            fixed_load(Product {
+                price: 150,
+                quantity: 53,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p2_b3);
+
+        let account4_p3_b1 = (
+            product_id(6),
+            fixed_load(Product {
+                price: 125,
+                quantity: 99,
+                start_period: 2,
+                end_period: 3,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p3_b1);
+
+        let account4_p4_b1 = (
+            product_id(7),
+            fixed_load(Product {
+                price: 200,
+                quantity: 72,
+                start_period: 3,
+                end_period: 4,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p4_b1);
+
+        let account4_p4_b2 = (
+            product_id(8),
+            fixed_load(Product {
+                price: 50,
+                quantity: 63,
+                start_period: 3,
+                end_period: 4,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account4_p4_b2);
+
+        let account5_p1_b1 = (
+            product_id(9),
+            fixed_load(Product {
+                price: 163,
+                quantity: 135,
+                start_period: 0,
+                end_period: 1,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account5_p1_b1);
+
+        let account5_p2_b1 = (
+            product_id(10),
+            fixed_load(Product {
+                price: 163,
+                quantity: 135,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account5_p2_b1);
+
+        let account5_p3_b1 = (
+            product_id(11),
+            fixed_load(Product {
+                price: 163,
+                quantity: 135,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account5_p3_b1);
+
+        let account5_p4_b1 = (
+            product_id(12),
+            fixed_load(Product {
+                price: 163,
+                quantity: 135,
+                start_period: 1,
+                end_period: 2,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account5_p4_b1);
+
+        let account6_b1 = (
+            product_id(13),
+            fixed_load(Product {
+                price: 600,
+                quantity: 60,
+                start_period: 2,
+                end_period: 4,
+                can_partially_accept: true,
+            }),
+        );
+        bids.push(account6_b1);
+
+        let solution = solve(bids, offers, 4).unwrap();
+        assert_eq!(solution.bids, vec![]);
+        assert_eq!(solution.offers, vec![],);
+        assert_eq!(solution.auction_prices, vec![5, 5, 5, 5])
     }
 
     // Helper function for readability
