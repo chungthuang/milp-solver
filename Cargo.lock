@@ -2459,6 +2459,7 @@ dependencies = [
  "parachain-client",
  "solver",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2586,7 +2587,6 @@ dependencies = [
  "serde",
  "serde_json",
  "test-log",
- "uuid",
 ]
 
 [[package]]

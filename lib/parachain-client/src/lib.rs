@@ -43,23 +43,23 @@ impl MarketState {
 #[derive(Debug)]
 pub struct MarketSolution {
     // For each account, track if the bids are accepted
-    pub bids: Vec<(ProductId, SelectedFlexibleLoad)>,
+    pub bids: Vec<AcceptedProduct>,
     // For each account, track if the asks are accepted
-    pub asks: Vec<(ProductId, SelectedFlexibleLoad)>,
+    pub offers: Vec<AcceptedProduct>,
     // Auction price for each period
-    pub auction_prices: Vec<u64>,
+    pub auction_prices: Vec<f64>,
 }
 
 impl MarketSolution {
     pub fn no_solution(&self) -> bool {
         if !self.bids.is_empty() {
-            return false
+            return false;
         }
-        if !self.asks.is_empty() {
-            return false
+        if !self.offers.is_empty() {
+            return false;
         }
         for p in self.auction_prices.iter() {
-            if *p > 0 {
+            if *p > 0. {
                 return false;
             }
         }
@@ -67,12 +67,32 @@ impl MarketSolution {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct Product {
-    pub price: u64,
-    pub quantity: u64,
+    pub price: f64,
+    pub quantity: f64,
     pub start_period: u32,
     pub end_period: u32,
+    pub can_partially_accept: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct AcceptedProduct {
+    pub id: ProductId,
+    pub load_index: SelectedFlexibleLoad,
+    // Percentage [0, 100] of quantity accepted from start to end period.
+    // We use an integer here because the runtime cannot perform floating point arithmetic.
+    pub percentage: u8,
+}
+
+impl Into<parachain::runtime_types::market_state::pallet::AcceptedProduct> for AcceptedProduct {
+    fn into(self) -> parachain::runtime_types::market_state::pallet::AcceptedProduct {
+        parachain::runtime_types::market_state::pallet::AcceptedProduct {
+            id: self.id,
+            load_index: self.load_index,
+            percentage: self.percentage,
+        }
+    }
 }
 
 pub type FlexibleProduct = Vec<Product>;
@@ -101,10 +121,17 @@ impl ParachainClient {
     }
 
     pub async fn submit_solution(&self, solution: MarketSolution) -> Result<H256> {
+        let auction_prices = solution
+            .auction_prices
+            .iter()
+            .map(|p| p.round() as u64)
+            .collect();
+        let accepted_bids = solution.bids.into_iter().map(|b| b.into()).collect();
+        let accepted_offers = solution.offers.into_iter().map(|a| a.into()).collect();
         let tx = parachain::tx().market_state().submit_solution(
-            BoundedVec(solution.auction_prices),
-            BoundedVec(solution.bids),
-            BoundedVec(solution.asks),
+            BoundedVec(auction_prices),
+            BoundedVec(accepted_bids),
+            BoundedVec(accepted_offers),
         );
         let hash = self
             .parachain_api
